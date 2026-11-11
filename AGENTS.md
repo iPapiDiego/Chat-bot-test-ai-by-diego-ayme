@@ -57,7 +57,7 @@ npm run deploy:dry  # build + empaquetado sin publicar
 npm run cf:dev      # build + wrangler dev (runtime real de Cloudflare)
 ```
 
-`wrangler.json` define `name`, `compatibility_date`, `compatibility_flags` y el binding KV `CALLBACKS`. Wrangler aprovisiona el namespace al desplegar; si prefieres fijarlo, ejecuta `npx wrangler kv namespace create CALLBACKS` y añade el `id` al binding. El build genera `dist/server/wrangler.json`; no lo edites a mano.
+`wrangler.json` define `name`, `compatibility_date`, `compatibility_flags` y el binding KV `CALLBACKS`. El binding **no lleva `id` a propósito**: los namespace ids son por cuenta, y aquí conviven dos (el deploy local y Workers Builds). Sin `id`, Wrangler 4 lo aprovisiona en la cuenta que despliega y en los deploys siguientes lo hereda (`env.CALLBACKS (inherited)`). No fijes un `id` salvo que despliegues siempre en la misma cuenta: un id de otra cuenta rompe el deploy con `KV namespace '<id>' not found [code: 10041]`. El build genera `dist/server/wrangler.json`; no lo edites a mano.
 
 ## Arquitectura
 

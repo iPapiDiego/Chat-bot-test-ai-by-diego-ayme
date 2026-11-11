@@ -59,7 +59,7 @@ npm run deploy
 
 `npm run deploy` compila y publica. El nombre del Worker (`chat-bot-test-ai-by-diego-ayme`) y el binding KV `CALLBACKS` viven en `wrangler.json`. Al terminar te dará una URL `https://chat-bot-test-ai-by-diego-ayme.<tu-subdominio>.workers.dev`.
 
-Los callbacks se guardan en Workers KV (namespace `CALLBACKS`, clave `callback:<executionId>`, TTL de 10 min), no en memoria del isolate: `POST` y `GET` pueden caer en isolates distintos. Si el namespace no existe, créalo con `npx wrangler kv namespace create CALLBACKS` y pon el `id` en el binding.
+Los callbacks se guardan en Workers KV (namespace `CALLBACKS`, clave `callback:<executionId>`, TTL de 10 min), no en memoria del isolate: `POST` y `GET` pueden caer en isolates distintos. El binding va **sin `id`** a propósito: Wrangler lo aprovisiona en la cuenta que despliega y luego lo hereda. Los ids de KV son por cuenta, así que fijar uno de otra cuenta rompe el deploy con `KV namespace '<id>' not found [code: 10041]`.
 
 Despliega con `wrangler` desde el repo. Subir `dist/` a mano o crear un proyecto de Pages no funciona: el SSR necesita el Worker con su binding `ASSETS`, que solo genera `wrangler deploy` (o Workers Builds con build `npm run build` y deploy `npx wrangler deploy`).
 
