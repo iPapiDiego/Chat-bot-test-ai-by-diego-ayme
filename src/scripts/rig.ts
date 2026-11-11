@@ -8,6 +8,7 @@ import {
   parseWebhook,
   saveConfig,
   targetLabel,
+  type PayloadMode,
   type RigConfig,
   type SavedTarget,
 } from "../lib/config";
@@ -20,28 +21,41 @@ import {
   type SelllyBlock,
   type SelllyCallback,
 } from "../lib/webhook";
+import { formatWhatsapp } from "../lib/whatsapp";
 
 interface MessageTimings {
   ackMs: number;
   callbackMs: number | null;
   pollMs: number | null;
   totalMs: number;
-  outcome: "ok" | "timeout" | "error";
+  outcome: "ok" | "timeout" | "error" | "grouped";
+  at: number;
+  groupedWith?: number | null;
+}
+
+type TurnStatus = "sent" | "ack" | "waiting" | "answered" | "timeout" | "grouped" | "error";
+
+interface TurnResponse {
+  text: string;
+  blocks?: SelllyBlock[];
   at: number;
 }
 
-type ChatMessage =
-  | { id: string; kind: "user"; text: string; at: number; ms?: number }
-  | {
-      id: string;
-      kind: "assistant";
-      text: string;
-      blocks?: SelllyBlock[];
-      at: number;
-      ms?: number;
-      timings?: MessageTimings;
-    }
-  | { id: string; kind: "error"; text: string; at: number; timings?: MessageTimings };
+interface Turn {
+  id: string;
+  ordinal: number;
+  text: string;
+  mode: PayloadMode;
+  at: number;
+  startedAt: number;
+  status: TurnStatus;
+  ackMs: number | null;
+  ackAt: number | null;
+  response: TurnResponse | null;
+  error: string | null;
+  timings: MessageTimings | null;
+  groupedWith: { ordinal: number; text: string } | null;
+}
 
 const el = <T extends HTMLElement>(id: string): T => {
   const node = document.getElementById(id);
@@ -77,17 +91,13 @@ const connectionLabel = el<HTMLSpanElement>("connection-label");
 const sessionLabel = el<HTMLParagraphElement>("session-label");
 const latencyPill = el<HTMLSpanElement>("latency-pill");
 const latencyValue = el<HTMLSpanElement>("latency-value");
+const inflightPill = el<HTMLSpanElement>("inflight-pill");
 const clearChatButton = el<HTMLButtonElement>("clear-chat");
 const transcript = el<HTMLDivElement>("transcript");
-const typingIndicator = el<HTMLDivElement>("typing-indicator");
-const typingLabel = el<HTMLSpanElement>("typing-label");
-const typingTimer = el<HTMLSpanElement>("typing-timer");
 const emptyState = el<HTMLDivElement>("empty-state");
 const emptyHints = el<HTMLDivElement>("empty-hints");
 const composer = el<HTMLFormElement>("composer");
 const messageInput = el<HTMLTextAreaElement>("message-input");
-const sendButton = el<HTMLButtonElement>("send-button");
-const sendLabel = el<HTMLSpanElement>("send-label");
 const charCount = el<HTMLSpanElement>("char-count");
 const composerNote = el<HTMLParagraphElement>("composer-note");
 const inspectStatus = el<HTMLSpanElement>("inspect-status");
@@ -113,6 +123,13 @@ const statsP50 = el<HTMLElement>("stats-p50");
 const statsP95 = el<HTMLElement>("stats-p95");
 const statsList = el<HTMLOListElement>("stats-list");
 const resetStatsButton = el<HTMLButtonElement>("reset-stats");
+const statsInflight = el<HTMLElement>("stats-inflight");
+const toggleBurstButton = el<HTMLButtonElement>("toggle-burst");
+const burstPanel = el<HTMLDivElement>("burst-panel");
+const burstMessages = el<HTMLTextAreaElement>("burst-messages");
+const burstDelay = el<HTMLInputElement>("burst-delay");
+const burstRepeat = el<HTMLInputElement>("burst-repeat");
+const sendBurstButton = el<HTMLButtonElement>("send-burst");
 const requestText = el<HTMLPreElement>("request-text");
 const metaList = el<HTMLDListElement>("meta-list");
 const metaTarget = el<HTMLParagraphElement>("meta-target");
@@ -121,15 +138,15 @@ const closeConfigButton = el<HTMLButtonElement>("close-config");
 const configPanel = el<HTMLElement>("config-panel");
 
 let config: RigConfig = loadConfig();
-let messages: ChatMessage[] = [];
-let busy = false;
+let turns: Turn[] = [];
+const pending = new Map<string, Turn>();
+let messageCounter = 0;
 let lastResult: ProbeResult | null = null;
 let lastRequest: Record<string, unknown> | null = null;
 let flashTimer = 0;
 let pollGeneration = 0;
 let sessionTimings: MessageTimings[] = [];
 let tickTimer = 0;
-let tickStart = 0;
 
 function applyConfigToForm(): void {
   urlInput.value = config.webhookUrl;
@@ -349,70 +366,190 @@ function setFlash(text: string): void {
 }
 
 function syncTranscriptNotice(): void {
-  const hasMessages = messages.length > 0;
-  emptyState.classList.toggle("hidden", hasMessages);
-  transcript.classList.toggle("justify-center", !hasMessages);
+  const hasTurns = turns.length > 0;
+  emptyState.classList.toggle("hidden", hasTurns);
+  transcript.classList.toggle("justify-center", !hasTurns);
 }
 
 function renderTranscript(): void {
-  transcript.querySelectorAll("[data-message]").forEach((node) => node.remove());
+  transcript.querySelectorAll("[data-turn]").forEach((node) => node.remove());
 
-  for (const message of messages) {
-    transcript.append(renderMessage(message));
+  for (const turn of turns) {
+    transcript.append(renderTurn(turn));
   }
-
-  transcript.append(typingIndicator);
 
   syncTranscriptNotice();
   scrollToBottom();
 }
 
-function renderMessage(message: ChatMessage): HTMLElement {
+const STATUS_BADGE = "rounded-full border px-2 py-0.5";
+const STATUS_NEUTRAL = `${STATUS_BADGE} border-white/10 bg-white/[0.02] text-quiet/70`;
+const STATUS_OK = `${STATUS_BADGE} border-signal/30 text-signal`;
+const STATUS_WARN = `${STATUS_BADGE} border-warn/30 text-warn`;
+const STATUS_DANGER = `${STATUS_BADGE} border-danger/30 text-danger`;
+
+function renderTurn(turn: Turn): HTMLElement {
   const wrapper = document.createElement("article");
-  wrapper.dataset.message = message.id;
-  wrapper.className =
-    "animate-rise flex flex-col gap-1.5 " + (message.kind === "user" ? "items-end" : "items-start");
+  wrapper.dataset.turn = turn.id;
+  wrapper.className = "animate-rise flex flex-col items-end gap-1.5";
 
   const header = document.createElement("div");
   header.className = "flex items-center gap-2 px-1 text-[10.5px] text-quiet/50";
   const author = document.createElement("span");
   author.className = "font-medium tracking-wide uppercase";
-  author.textContent =
-    message.kind === "user" ? "Tú" : message.kind === "assistant" ? "Webhook" : "Error";
+  author.textContent = "Tú";
+  const ordinal = document.createElement("span");
+  ordinal.className = "font-mono text-quiet/40";
+  ordinal.textContent = `#${turn.ordinal}`;
   const time = document.createElement("span");
   time.className = "font-mono";
-  time.textContent = formatTime(message.at);
+  time.textContent = formatTime(turn.at);
+  header.append(author, ordinal, time);
+
+  const bubble = document.createElement("div");
+  bubble.className =
+    "max-w-[85%] rounded-2xl rounded-ee-md border border-signal/25 bg-signal/12 px-4 py-2.5 text-[14.5px] leading-relaxed whitespace-pre-wrap break-words text-paper";
+  bubble.textContent = turn.text;
+
+  wrapper.append(header, bubble, renderTurnStatus(turn));
+
+  if (turn.response) {
+    wrapper.append(renderTurnResponse(turn));
+  }
+  if (turn.groupedWith) {
+    wrapper.append(
+      renderTurnNote(
+        `Sin callback propio: la respuesta llegó agrupada en el mensaje #${turn.groupedWith.ordinal}.`,
+        "warn",
+      ),
+    );
+  }
+  if (turn.error) {
+    wrapper.append(renderTurnNote(turn.error, "danger"));
+  }
+
+  return wrapper;
+}
+
+function renderTurnStatus(turn: Turn): HTMLElement {
+  const row = document.createElement("div");
+  row.className = "flex flex-wrap items-center justify-end gap-1.5 px-1 font-mono text-[10.5px]";
+
+  const badge = document.createElement("span");
+  const live = turn.status === "sent" || turn.status === "ack" || turn.status === "waiting";
+
+  switch (turn.status) {
+    case "sent":
+      badge.className = STATUS_NEUTRAL;
+      badge.textContent = "enviado";
+      break;
+    case "ack":
+      badge.className = STATUS_NEUTRAL;
+      badge.textContent = "ACK recibido";
+      break;
+    case "waiting":
+      badge.className = STATUS_NEUTRAL;
+      badge.textContent =
+        turn.ackMs !== null ? `ACK ${formatSeconds(turn.ackMs)} · esperando callback` : "esperando callback";
+      break;
+    case "answered":
+      badge.className = STATUS_OK;
+      badge.textContent = "respondido";
+      break;
+    case "timeout":
+      badge.className = STATUS_DANGER;
+      badge.textContent = "timeout · callback no recibido";
+      break;
+    case "grouped":
+      badge.className = STATUS_WARN;
+      badge.textContent = `agrupado con el mensaje #${turn.groupedWith?.ordinal ?? "?"}`;
+      if (turn.groupedWith) {
+        badge.title = `Agrupado con #${turn.groupedWith.ordinal}: «${turn.groupedWith.text.slice(0, 120)}»`;
+      }
+      break;
+    case "error":
+      badge.className = STATUS_DANGER;
+      badge.textContent = "error";
+      break;
+  }
+
+  row.append(badge);
+
+  if (live) {
+    const timer = document.createElement("span");
+    timer.dataset.turnTimer = turn.id;
+    timer.setAttribute("aria-hidden", "true");
+    timer.className = "tabular-nums text-quiet/60";
+    timer.textContent = formatClock(Date.now() - turn.startedAt);
+    row.append(timer);
+  } else if (turn.timings) {
+    const total = document.createElement("span");
+    const stopped = turn.status === "timeout" || turn.status === "grouped";
+    total.className = `tabular-nums ${toneFor(turn.timings.totalMs, turn.timings.outcome)}`;
+    total.textContent = stopped
+      ? formatClock(turn.timings.totalMs)
+      : `total ${formatSeconds(turn.timings.totalMs)}`;
+    row.append(total);
+  }
+
+  return row;
+}
+
+function renderTurnResponse(turn: Turn): HTMLElement {
+  const response = turn.response;
+  if (!response) {
+    return document.createElement("div");
+  }
+
+  const container = document.createElement("div");
+  container.className = "mt-1 flex w-full flex-col items-start gap-1.5";
+
+  const header = document.createElement("div");
+  header.className = "flex items-center gap-2 px-1 text-[10.5px] text-quiet/50";
+  const author = document.createElement("span");
+  author.className = "font-medium tracking-wide uppercase";
+  author.textContent = "Webhook";
+  const time = document.createElement("span");
+  time.className = "font-mono";
+  time.textContent = formatTime(response.at);
   header.append(author, time);
 
-  if (message.kind !== "error" && typeof message.ms === "number") {
-    const ms = document.createElement("span");
-    ms.className = "font-mono text-signal/70";
-    ms.textContent = `${message.ms} ms`;
-    header.append(ms);
+  if (turn.timings) {
+    const total = document.createElement("span");
+    total.className = "font-mono text-signal/70";
+    total.textContent = `${Math.round(turn.timings.totalMs)} ms`;
+    header.append(total);
   }
 
   const bubble = document.createElement("div");
   bubble.className =
-    message.kind === "user"
-      ? "max-w-[85%] rounded-2xl rounded-ee-md border border-signal/25 bg-signal/12 px-4 py-2.5 text-[14.5px] leading-relaxed whitespace-pre-wrap break-words text-paper"
-      : message.kind === "assistant"
-        ? "max-w-[92%] rounded-2xl rounded-es-md border border-white/10 bg-white/[0.04] px-4 py-2.5 text-[14.5px] leading-relaxed whitespace-pre-wrap break-words text-paper/95"
-        : "max-w-[92%] rounded-2xl rounded-es-md border border-danger/25 bg-danger/8 px-4 py-2.5 text-[13px] leading-relaxed whitespace-pre-wrap break-words text-danger/95";
+    "max-w-[92%] rounded-2xl rounded-es-md border border-white/10 bg-white/[0.04] px-4 py-2.5 text-[14.5px] leading-relaxed whitespace-pre-wrap break-words text-paper/95";
 
-  if (message.kind === "assistant" && message.blocks?.length) {
+  if (response.blocks?.length) {
     bubble.classList.add("space-y-2");
-    for (const block of message.blocks) {
+    for (const block of response.blocks) {
       bubble.append(renderBlock(block));
     }
   } else {
-    bubble.textContent = message.text;
+    bubble.innerHTML = formatWhatsapp(response.text);
   }
 
-  wrapper.append(header, bubble);
-  if (message.kind !== "user" && message.timings) {
-    wrapper.append(renderTimingChip(message.timings));
+  container.append(header, bubble);
+  if (turn.timings) {
+    container.append(renderTimingChip(turn.timings));
   }
-  return wrapper;
+  return container;
+}
+
+function renderTurnNote(text: string, tone: "warn" | "danger"): HTMLElement {
+  const note = document.createElement("div");
+  const palette =
+    tone === "warn"
+      ? "border-warn/25 bg-warn/8 text-warn/95"
+      : "border-danger/25 bg-danger/8 text-danger/95";
+  note.className = `mt-1 max-w-[92%] rounded-2xl rounded-es-md border px-4 py-2.5 text-[12.5px] leading-relaxed whitespace-pre-wrap break-words ${palette}`;
+  note.textContent = text;
+  return note;
 }
 
 function renderBlock(block: SelllyBlock): HTMLElement {
@@ -447,7 +584,7 @@ function renderBlock(block: SelllyBlock): HTMLElement {
 
   const paragraph = document.createElement("p");
   paragraph.className = "whitespace-pre-wrap break-words";
-  paragraph.textContent = block.text ?? "";
+  paragraph.innerHTML = formatWhatsapp(block.text ?? "");
   return paragraph;
 }
 
@@ -459,8 +596,6 @@ function scrollToBottom(): void {
   transcript.scrollTo({ top: transcript.scrollHeight, behavior: "smooth" });
 }
 
-const TIMER_NEUTRAL = "mt-1.5 font-mono text-[11.5px] tracking-tight text-quiet/70 tabular-nums";
-const TIMER_DANGER = "mt-1.5 font-mono text-[11.5px] tracking-tight text-danger tabular-nums";
 const TONE_CLASSES = ["text-paper", "text-signal", "text-warn", "text-danger"];
 
 function formatSeconds(ms: number): string {
@@ -475,6 +610,7 @@ function formatClock(ms: number): string {
 }
 
 function toneFor(totalMs: number, outcome: MessageTimings["outcome"]): string {
+  if (outcome === "grouped") return "text-warn";
   if (outcome !== "ok") return "text-danger";
   if (totalMs > 15000) return "text-danger";
   if (totalMs >= 5000) return "text-warn";
@@ -494,6 +630,8 @@ function renderTimingChip(timings: MessageTimings): HTMLElement {
   if (timings.callbackMs !== null) {
     const poll = timings.pollMs !== null ? ` (+${formatSeconds(timings.pollMs)} polling)` : "";
     parts.push(`callback ${formatSeconds(timings.callbackMs)}${poll}`);
+  } else if (timings.outcome === "grouped") {
+    parts.push(`agrupado con #${timings.groupedWith ?? "?"}`);
   } else if (timings.outcome === "timeout") {
     parts.push("callback no recibido");
   }
@@ -509,8 +647,10 @@ function renderTimingChip(timings: MessageTimings): HTMLElement {
   }
 
   const total = document.createElement("span");
+  const totalLabel =
+    timings.outcome === "timeout" ? "timeout" : timings.outcome === "grouped" ? "sin callback" : "total";
   total.className = `font-medium ${toneFor(timings.totalMs, timings.outcome)}`;
-  total.textContent = `${timings.outcome === "timeout" ? "timeout" : "total"} ${formatSeconds(timings.totalMs)}`;
+  total.textContent = `${totalLabel} ${formatSeconds(timings.totalMs)}`;
   chip.append(total);
 
   return chip;
@@ -524,15 +664,25 @@ function renderReplyTimings(timings: MessageTimings | null): void {
   }
 
   const callbackValue =
-    timings.callbackMs === null
-      ? timings.outcome === "timeout"
-        ? "no recibido"
-        : "—"
-      : formatSeconds(timings.callbackMs);
+    timings.callbackMs !== null
+      ? formatSeconds(timings.callbackMs)
+      : timings.outcome === "grouped"
+        ? `sin callback propio (agrupado con #${timings.groupedWith ?? "?"})`
+        : timings.outcome === "timeout"
+          ? "no recibido"
+          : "—";
 
   const rows: Array<[string, string, string | null]> = [
     ["ACK", formatSeconds(timings.ackMs), null],
-    ["Callback", callbackValue, timings.outcome === "timeout" ? "text-danger" : null],
+    [
+      "Callback",
+      callbackValue,
+      timings.outcome === "timeout"
+        ? "text-danger"
+        : timings.outcome === "grouped"
+          ? "text-warn"
+          : null,
+    ],
     ["Polling", timings.pollMs === null ? "—" : formatSeconds(timings.pollMs), null],
     ["Total", formatSeconds(timings.totalMs), toneFor(timings.totalMs, timings.outcome)],
   ];
@@ -566,10 +716,11 @@ function percentile(sorted: number[], p: number): number {
 }
 
 function renderStats(): void {
-  const totals = sessionTimings.map((timing) => timing.totalMs);
-  statsCount.textContent = String(totals.length);
+  const numeric = sessionTimings.filter((timing) => timing.outcome !== "grouped");
+  const totals = numeric.map((timing) => timing.totalMs);
+  statsCount.textContent = String(sessionTimings.length);
 
-  if (!totals.length) {
+  if (!sessionTimings.length) {
     for (const element of [statsLast, statsAvg, statsMin, statsMax, statsP50, statsP95]) {
       element.textContent = "—";
       paintTone(element, "text-paper");
@@ -581,16 +732,22 @@ function renderStats(): void {
     return;
   }
 
-  const sorted = [...totals].sort((a, b) => a - b);
   const last = sessionTimings[sessionTimings.length - 1];
-
   statsLast.textContent = formatSeconds(last.totalMs);
   paintTone(statsLast, toneFor(last.totalMs, last.outcome));
-  statsAvg.textContent = formatSeconds(totals.reduce((sum, value) => sum + value, 0) / totals.length);
-  statsMin.textContent = formatSeconds(sorted[0]);
-  statsMax.textContent = formatSeconds(sorted[sorted.length - 1]);
-  statsP50.textContent = formatSeconds(percentile(sorted, 50));
-  statsP95.textContent = formatSeconds(percentile(sorted, 95));
+
+  if (totals.length) {
+    const sorted = [...totals].sort((a, b) => a - b);
+    statsAvg.textContent = formatSeconds(totals.reduce((sum, value) => sum + value, 0) / totals.length);
+    statsMin.textContent = formatSeconds(sorted[0]);
+    statsMax.textContent = formatSeconds(sorted[sorted.length - 1]);
+    statsP50.textContent = formatSeconds(percentile(sorted, 50));
+    statsP95.textContent = formatSeconds(percentile(sorted, 95));
+  } else {
+    for (const element of [statsAvg, statsMin, statsMax, statsP50, statsP95]) {
+      element.textContent = "—";
+    }
+  }
 
   const recent = sessionTimings.slice(-20).reverse();
   statsList.replaceChildren(
@@ -615,8 +772,13 @@ function renderStats(): void {
 
       if (timing.outcome !== "ok") {
         const tag = document.createElement("span");
-        tag.className = "rounded border border-danger/30 px-1 text-[9.5px] text-danger";
-        tag.textContent = timing.outcome === "timeout" ? "timeout" : "error";
+        if (timing.outcome === "grouped") {
+          tag.className = "rounded border border-warn/30 px-1 text-[9.5px] text-warn";
+          tag.textContent = "agrupado";
+        } else {
+          tag.className = "rounded border border-danger/30 px-1 text-[9.5px] text-danger";
+          tag.textContent = timing.outcome === "timeout" ? "timeout" : "error";
+        }
         item.append(tag);
       }
 
@@ -630,60 +792,102 @@ function resetStats(): void {
   renderStats();
 }
 
-function showTyping(visible: boolean): void {
-  typingIndicator.classList.toggle("hidden", !visible);
-  typingIndicator.classList.toggle("flex", visible);
-  if (visible) {
-    transcript.append(typingIndicator);
-    scrollToBottom();
-  }
-}
-
-function startTicker(startedAt: number): void {
-  stopTicker();
-  tickStart = startedAt;
-  typingLabel.textContent = "Esperando respuesta";
-  typingLabel.className = "text-[13px] text-quiet/85";
-  typingTimer.textContent = "00:00.0";
-  typingTimer.className = TIMER_NEUTRAL;
-  showTyping(true);
-  tickTimer = window.setInterval(() => {
-    typingTimer.textContent = formatClock(Date.now() - tickStart);
-  }, 100);
-}
-
-function stopTicker(options?: { timeout?: boolean; totalMs?: number }): void {
+function resetConversation(): void {
+  pollGeneration++;
+  pending.clear();
+  turns = [];
+  messageCounter = 0;
   if (tickTimer) {
     window.clearInterval(tickTimer);
     tickTimer = 0;
   }
-
-  if (options?.timeout) {
-    const totalMs = options.totalMs ?? Date.now() - tickStart;
-    typingLabel.textContent = "Timeout: callback no recibido";
-    typingLabel.className = "text-[13px] text-danger/90";
-    typingTimer.textContent = formatClock(totalMs);
-    typingTimer.className = TIMER_DANGER;
-    showTyping(true);
-    return;
-  }
-
-  showTyping(false);
+  resetStats();
+  updateInFlight();
+  renderTranscript();
 }
 
-function setBusy(value: boolean): void {
-  busy = value;
-  sendButton.disabled = value;
-  sendLabel.textContent = value ? "Enviando" : "Enviar";
-  inspectStatus.textContent = value ? "esperando" : lastResult ? String(lastResult.status || "error") : "idle";
-  if (value) {
-    latencyPill.classList.remove("hidden");
-    latencyValue.textContent = "…";
+function updateInFlight(): void {
+  const count = pending.size;
+  const label = `en vuelo: ${count}`;
+  statsInflight.textContent = label;
+  statsInflight.className =
+    "rounded-full border px-2 py-0.5 font-mono text-[10.5px] " +
+    (count ? "border-warn/30 text-warn" : "border-white/10 text-quiet/50");
+
+  inflightPill.textContent = label;
+  inflightPill.classList.toggle("hidden", count === 0);
+  inflightPill.classList.toggle("flex", count > 0);
+
+  if (count) {
+    inspectStatus.textContent = `${count} en vuelo`;
+  } else {
+    inspectStatus.textContent = lastResult ? String(lastResult.status || "error") : "idle";
   }
 }
 
-async function sendMessage(text: string): Promise<void> {
-  if (busy) return;
+function tickTimers(): void {
+  const now = Date.now();
+  transcript.querySelectorAll<HTMLElement>("[data-turn-timer]").forEach((node) => {
+    const turn = pending.get(node.dataset.turnTimer ?? "");
+    if (!turn) return;
+    node.textContent = formatClock(now - turn.startedAt);
+  });
+}
+
+function ensureTicker(): void {
+  if (!tickTimer) tickTimer = window.setInterval(tickTimers, 100);
+}
+
+function maybeStopTicker(): void {
+  if (pending.size || !tickTimer) return;
+  window.clearInterval(tickTimer);
+  tickTimer = 0;
+}
+
+function buildHistory(): ChatTurn[] {
+  const history: ChatTurn[] = [];
+  for (const turn of turns) {
+    history.push({ role: "user", content: turn.text });
+    if (turn.response?.text) history.push({ role: "assistant", content: turn.response.text });
+  }
+  return history;
+}
+
+function clampInt(value: string, min: number, max: number, fallback: number): number {
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric)) return fallback;
+  return Math.min(max, Math.max(min, Math.round(numeric)));
+}
+
+function finishTurn(
+  turn: Turn,
+  timings: MessageTimings,
+  status: TurnStatus,
+  response: TurnResponse | null,
+  error: string | null,
+): void {
+  turn.status = status;
+  turn.timings = timings;
+  turn.response = response;
+  turn.error = error;
+  finalizeTimings(timings);
+  renderTranscript();
+}
+
+function findGroupingTurn(turn: Turn): Turn | null {
+  let candidate: Turn | null = null;
+  for (const other of turns) {
+    if (other === turn) continue;
+    if (other.status !== "answered" || !other.response) continue;
+    if (other.response.at < turn.startedAt) continue;
+    if (!candidate || other.response.at > (candidate.response?.at ?? 0)) {
+      candidate = other;
+    }
+  }
+  return candidate;
+}
+
+async function sendMessage(text: string, options?: { clearComposer?: boolean }): Promise<void> {
   const trimmed = text.trim();
   if (!trimmed) return;
 
@@ -695,32 +899,47 @@ async function sendMessage(text: string): Promise<void> {
     return;
   }
 
-  const isSellly = config.payloadMode === "sellly";
+  const mode = config.payloadMode;
+  const isSellly = mode === "sellly";
   if (isSellly && !validateSelllyFields()) {
     publicBaseInput.focus();
     return;
   }
 
-  const history: ChatTurn[] = messages
-    .filter((message): message is Extract<ChatMessage, { kind: "user" | "assistant" }> =>
-      message.kind === "user" || message.kind === "assistant",
-    )
-    .map((message) => ({ role: message.kind === "user" ? "user" : "assistant", content: message.text }));
+  const history = buildHistory();
+  const startedAt = Date.now();
+  const executionId = isSellly
+    ? createUuid()
+    : `turn_${startedAt.toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
 
-  const userMessage: ChatMessage = {
-    id: `m_${Date.now().toString(36)}_u`,
-    kind: "user",
+  const turn: Turn = {
+    id: executionId,
+    ordinal: ++messageCounter,
     text: trimmed,
-    at: Date.now(),
+    mode,
+    at: startedAt,
+    startedAt,
+    status: "sent",
+    ackMs: null,
+    ackAt: null,
+    response: null,
+    error: null,
+    timings: null,
+    groupedWith: null,
   };
-  messages.push(userMessage);
-  renderTranscript();
-  messageInput.value = "";
-  autoSize();
-  updateCharCount();
 
-  const executionId = isSellly ? createUuid() : "";
-  const payload = buildPayload(config.payloadMode, {
+  turns.push(turn);
+  pending.set(turn.id, turn);
+  renderTranscript();
+  updateInFlight();
+
+  if (options?.clearComposer !== false) {
+    messageInput.value = "";
+    autoSize();
+    updateCharCount();
+  }
+
+  const payload = buildPayload(mode, {
     message: trimmed,
     history,
     model: config.model,
@@ -735,203 +954,192 @@ async function sendMessage(text: string): Promise<void> {
   lastRequest = payload;
   requestText.textContent = JSON.stringify(payload, null, 2);
   renderReplyTimings(null);
-  inspectStatus.textContent = "enviando";
 
-  const startedAt = Date.now();
-  startTicker(startedAt);
-  setBusy(true);
-
+  const generation = pollGeneration;
   const started = performance.now();
+  ensureTicker();
+
   try {
     const result =
       config.transport === "direct"
         ? await sendDirect(url, payload, started)
         : await sendViaProxy(url, trimmed, history, executionId, started);
 
+    if (generation !== pollGeneration) return;
+
     const ackAt = Date.now();
-    const elapsed = result.elapsedMs;
-    latencyValue.textContent = `${elapsed} ms`;
+    const ackMs = ackAt - startedAt;
+    turn.ackMs = ackMs;
+    turn.ackAt = ackAt;
+
+    latencyValue.textContent = `${result.elapsedMs} ms`;
+    latencyPill.classList.remove("hidden");
     lastResult = result;
     updateInspector(result);
 
-    if (isSellly) {
-      await handleSelllyResult(result, executionId, startedAt, ackAt);
-    } else {
-      const totalMs = ackAt - startedAt;
-      stopTicker();
+    if (!result.ok) {
       const timings: MessageTimings = {
-        ackMs: totalMs,
+        ackMs,
         callbackMs: null,
         pollMs: null,
-        totalMs,
+        totalMs: ackAt - startedAt,
+        outcome: "error",
+        at: ackAt,
+      };
+      finishTurn(
+        turn,
+        timings,
+        "error",
+        null,
+        result.error ?? `El webhook respondió ${result.status || "sin estado"}.`,
+      );
+      return;
+    }
+
+    if (!isSellly) {
+      const timings: MessageTimings = {
+        ackMs,
+        callbackMs: null,
+        pollMs: null,
+        totalMs: ackMs,
         outcome: result.reply ? "ok" : "error",
         at: ackAt,
       };
 
       if (result.reply) {
-        messages.push({
-          id: `m_${Date.now().toString(36)}_a`,
-          kind: "assistant",
-          text: result.reply,
-          at: Date.now(),
-          ms: elapsed,
-          timings,
-        });
+        finishTurn(turn, timings, "answered", { text: result.reply, at: Date.now() }, null);
       } else {
-        messages.push({
-          id: `m_${Date.now().toString(36)}_e`,
-          kind: "error",
-          text: result.error ?? "La respuesta llegó sin texto legible. Revisa la pestaña Crudo.",
-          at: Date.now(),
+        finishTurn(
+          turn,
           timings,
-        });
+          "error",
+          null,
+          result.error ?? "La respuesta llegó sin texto legible. Revisa la pestaña Crudo.",
+        );
       }
-      finalizeTimings(timings);
+      return;
     }
+
+    turn.status = "waiting";
     renderTranscript();
-  } catch (error) {
-    const failedAt = Date.now();
-    const totalMs = failedAt - startedAt;
-    stopTicker();
-    const timings: MessageTimings = {
-      ackMs: totalMs,
-      callbackMs: null,
-      pollMs: null,
-      totalMs,
-      outcome: "error",
-      at: failedAt,
-    };
 
-    const message = error instanceof Error ? error.message : "Error desconocido";
-    messages.push({
-      id: `m_${Date.now().toString(36)}_e`,
-      kind: "error",
-      text: message,
-      at: Date.now(),
-      timings,
-    });
-    finalizeTimings(timings);
-    latencyValue.textContent = "—";
-    inspectStatus.textContent = "falló";
-    renderTranscript();
-  } finally {
-    setBusy(false);
-    renderConnection();
-    messageInput.focus();
-  }
-}
+    const callback = await waitForCallback(executionId);
+    if (generation !== pollGeneration) return;
 
-async function handleSelllyResult(
-  result: ProbeResult,
-  executionId: string,
-  startedAt: number,
-  ackAt: number,
-): Promise<void> {
-  const ackMs = ackAt - startedAt;
+    if (!callback) {
+      const totalMs = Date.now() - startedAt;
+      const grouped = findGroupingTurn(turn);
+      const timings: MessageTimings = {
+        ackMs,
+        callbackMs: null,
+        pollMs: null,
+        totalMs,
+        outcome: grouped ? "grouped" : "timeout",
+        at: Date.now(),
+        groupedWith: grouped?.ordinal ?? null,
+      };
 
-  if (!result.ok) {
-    const totalMs = Date.now() - startedAt;
-    stopTicker();
+      if (grouped) {
+        turn.groupedWith = { ordinal: grouped.ordinal, text: grouped.text };
+        finishTurn(turn, timings, "grouped", null, null);
+      } else {
+        finishTurn(
+          turn,
+          timings,
+          "timeout",
+          null,
+          `Timeout a los ${formatClock(totalMs)}: el callback no llegó en 120 s. Revisa la URL pública del rig y el túnel.`,
+        );
+      }
+      return;
+    }
+
+    const observedAt = callback.observedAt;
+    const totalMs = observedAt - startedAt;
+    const callbackMs = Math.max(0, callback.receivedAt - ackAt);
+    const pollMs = Math.max(0, observedAt - callback.receivedAt);
+    const blocks = normalizeSelllyBlocks(callback.payload);
     const timings: MessageTimings = {
       ackMs,
-      callbackMs: null,
-      pollMs: null,
+      callbackMs,
+      pollMs,
       totalMs,
-      outcome: "error",
-      at: Date.now(),
+      outcome: blocks.length ? "ok" : "error",
+      at: observedAt,
     };
-    messages.push({
-      id: `m_${Date.now().toString(36)}_e`,
-      kind: "error",
-      text: result.error ?? `Sellly AI respondió ${result.status || "sin estado"} al ACK.`,
-      at: Date.now(),
-      timings,
-    });
-    finalizeTimings(timings);
-    return;
-  }
 
-  typingLabel.textContent = "Esperando callback";
-  setPolling(true);
-  const generation = pollGeneration;
-  const callback = await waitForCallback(executionId);
-  setPolling(false);
+    updateCallbackInspector(callback);
 
-  if (generation !== pollGeneration) {
-    stopTicker();
-    return;
-  }
+    if (!blocks.length) {
+      finishTurn(turn, timings, "error", null, "El callback llegó sin bloques legibles. Revisa la pestaña Callback.");
+      return;
+    }
 
-  if (!callback) {
-    const totalMs = Date.now() - startedAt;
-    stopTicker({ timeout: true, totalMs });
-    const timings: MessageTimings = {
-      ackMs,
-      callbackMs: null,
-      pollMs: null,
-      totalMs,
-      outcome: "timeout",
-      at: Date.now(),
-    };
-    messages.push({
-      id: `m_${Date.now().toString(36)}_e`,
-      kind: "error",
-      text: `Timeout a los ${formatClock(totalMs)}: el callback no llegó en 120 s. Revisa la URL pública del rig y el túnel.`,
-      at: Date.now(),
-      timings,
-    });
-    finalizeTimings(timings);
-    return;
-  }
-
-  const observedAt = callback.observedAt;
-  const totalMs = observedAt - startedAt;
-  const callbackMs = Math.max(0, callback.receivedAt - ackAt);
-  const pollMs = Math.max(0, observedAt - callback.receivedAt);
-  const blocks = normalizeSelllyBlocks(callback.payload);
-  const timings: MessageTimings = {
-    ackMs,
-    callbackMs,
-    pollMs,
-    totalMs,
-    outcome: blocks.length ? "ok" : "error",
-    at: observedAt,
-  };
-
-  stopTicker();
-  updateCallbackInspector(callback);
-
-  if (!blocks.length) {
-    messages.push({
-      id: `m_${Date.now().toString(36)}_e`,
-      kind: "error",
-      text: "El callback llegó sin bloques legibles. Revisa la pestaña Callback.",
-      at: Date.now(),
-      timings,
-    });
-  } else {
-    messages.push({
-      id: `m_${Date.now().toString(36)}_a`,
-      kind: "assistant",
+    const response: TurnResponse = {
       text: blocks
         .filter((block) => block.type === "text" && block.text)
         .map((block) => block.text)
         .join("\n\n"),
       blocks,
       at: Date.now(),
-      ms: Math.round(totalMs),
-      timings,
-    });
+    };
+    finishTurn(turn, timings, "answered", response, null);
+  } catch (err) {
+    if (generation !== pollGeneration) return;
+    const failedAt = Date.now();
+    const totalMs = failedAt - startedAt;
+    const timings: MessageTimings = {
+      ackMs: turn.ackMs ?? totalMs,
+      callbackMs: null,
+      pollMs: null,
+      totalMs,
+      outcome: "error",
+      at: failedAt,
+    };
+    const message = err instanceof Error ? err.message : "Error desconocido";
+    finishTurn(turn, timings, "error", null, message);
+    latencyValue.textContent = "—";
+  } finally {
+    if (pending.get(turn.id) === turn) pending.delete(turn.id);
+    updateInFlight();
+    maybeStopTicker();
+    renderTranscript();
+    renderConnection();
+    if (options?.clearComposer !== false) messageInput.focus();
   }
-  finalizeTimings(timings);
 }
 
-function setPolling(active: boolean): void {
-  if (active) {
-    sendLabel.textContent = "Esperando";
-    inspectStatus.textContent = "callback";
-    composerNote.textContent = "ACK recibido. Esperando el callback de Sellly AI (hasta 120s)…";
+async function sendBurst(): Promise<void> {
+  const lines = burstMessages.value
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean);
+
+  if (!lines.length) {
+    setFlash("Escribe al menos un mensaje en la ráfaga");
+    burstMessages.focus();
+    return;
   }
+
+  const repeat = clampInt(burstRepeat.value, 1, 20, 1);
+  const delayMs = clampInt(burstDelay.value, 0, 30000, 0);
+  burstRepeat.value = String(repeat);
+  burstDelay.value = String(delayMs);
+
+  const queue = lines.flatMap((line) => Array.from({ length: repeat }, () => line));
+
+  if (delayMs <= 0) {
+    void Promise.all(queue.map((text) => sendMessage(text, { clearComposer: false })));
+  } else {
+    const generation = pollGeneration;
+    for (let index = 0; index < queue.length; index++) {
+      if (generation !== pollGeneration) break;
+      if (index > 0) await delay(delayMs);
+      void sendMessage(queue[index], { clearComposer: false });
+    }
+  }
+
+  setFlash(`Ráfaga: ${queue.length} mensaje${queue.length === 1 ? "" : "s"}`);
 }
 
 async function waitForCallback(executionId: string): Promise<SelllyCallback | null> {
@@ -1270,15 +1478,12 @@ function initEvents(): void {
   resetButton.addEventListener("click", () => {
     if (!window.confirm("¿Restablecer todos los ajustes y borrar la conversación?")) return;
     localStorage.removeItem("webhook-rig.config.v1");
-    pollGeneration++;
-    stopTicker();
-    resetStats();
+    resetConversation();
     config = loadConfig();
     config.sessionId = createSessionId();
     config.conversationId = createUuid();
     config.contactId = createUuid();
     config.contactExternalId = createUuid();
-    messages = [];
     lastResult = null;
     lastRequest = null;
     applyConfigToForm();
@@ -1307,10 +1512,7 @@ function initEvents(): void {
   });
 
   clearChatButton.addEventListener("click", () => {
-    pollGeneration++;
-    stopTicker();
-    resetStats();
-    messages = [];
+    resetConversation();
     config = {
       ...config,
       sessionId: createSessionId(),
@@ -1323,6 +1525,17 @@ function initEvents(): void {
     renderTranscript();
     resetInspector();
     messageInput.focus();
+  });
+
+  toggleBurstButton.addEventListener("click", () => {
+    const open = burstPanel.classList.contains("hidden");
+    burstPanel.classList.toggle("hidden", !open);
+    toggleBurstButton.setAttribute("aria-expanded", String(open));
+    if (open) burstMessages.focus();
+  });
+
+  sendBurstButton.addEventListener("click", () => {
+    void sendBurst();
   });
 
   resetStatsButton.addEventListener("click", () => {
@@ -1403,6 +1616,7 @@ function boot(): void {
   autoSize();
   updateCharCount();
   renderStats();
+  updateInFlight();
   try {
     initFlowbite();
   } catch {

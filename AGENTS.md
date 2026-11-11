@@ -2,6 +2,28 @@
 
 Laboratorio de pruebas de chatbots por webhook. Astro 7 (SSR) + Tailwind 4 + Flowbite 4, desplegado en Cloudflare Workers.
 
+## Codebase Memory (MCP) — uso obligatorio
+
+El grafo de conocimiento del repo es la fuente de verdad sobre cómo se compone este proyecto. Úsalo **siempre** antes de explorar con grep, planear o editar; no adivines la estructura ni el impacto de un cambio.
+
+- Servidor: `codebase-memory` (stdio), registrado a nivel de usuario en `~/.commandcode/mcp.json`.
+- Proyecto indexado: `Volumes-Kingston-Development-Proyects-Tests-Chat-bot-test-ai-by-diego-ayme`.
+- Flujo mínimo de cada tarea:
+  1. `list_projects` / `index_status` — confirmar proyecto indexado y frescura.
+  2. `get_architecture(aspects=["all"])` — capas, fronteras, hotspots, rutas y clústeres.
+  3. `search_graph(name_pattern=...)` → `get_code_snippet(qualified_name=...)` — localizar y leer símbolos.
+  4. `trace_path(function_name=..., direction="both", depth=3)` — quién llama y a quién llama.
+  5. `detect_changes()` — símbolos afectados por el working tree antes de cerrar un cambio.
+  6. `check_index_coverage()` con todas las rutas implicadas — obligatorio antes de afirmar "no existe", "código muerto" o impacto completo.
+- Tras crear, mover o borrar archivos, o cambiar firmas: reindexar con `index_repository` (`repo_path`).
+- Nivel de evidencia por defecto: **Verify** — búsquedas dirigidas, ambas direcciones del trace, snippet de cada afirmación material y todas las páginas de resultados (`has_more` / `offset`).
+- Si el MCP no aparece conectado en la sesión (`/mcp`), usa el mismo servidor por CLI con flags:
+  ```bash
+  ~/.local/bin/codebase-memory-mcp cli --quiet get_architecture --project <proyecto> --aspects all
+  ~/.local/bin/codebase-memory-mcp cli --quiet search_graph --project <proyecto> --name-pattern '.*Callback.*'
+  ```
+  El JSON crudo como argumento está deprecado; usa flags o `--args-file`.
+
 ## Development
 
 Requiere Node `>= 22.23.4` (Astro 7). Si el Node del sistema es menor, usa nvm:
@@ -40,8 +62,12 @@ npm run cf:dev      # build + wrangler dev (runtime real de Cloudflare)
 ## Arquitectura
 
 - `src/pages/api/probe.ts` es el proxy SSR. Hace la llamada al webhook para evitar CORS y valida el destino contra SSRF (`validateTarget` en `src/lib/webhook.ts`). En `development` permite hosts privados; en producción los bloquea salvo `ALLOW_PRIVATE_TARGETS=true`.
+- `src/pages/api/callback/[executionId].ts` recibe la respuesta asíncrona del bot: `POST` valida `executionId` (UUID v4), exige `application/json`, limita el cuerpo a 256 KB y guarda el payload en un `Map` global con TTL de 10 min y tope de 500 entradas; `GET` lo devuelve. `parseJsonBody` reintenta escapando caracteres de control dentro de strings.
 - `src/lib/webhook.ts` construye payloads (`simple` / `openai`), extrae el texto de respuesta de múltiples formatos y contiene el guard de hosts privados.
 - `src/lib/config.ts` maneja el estado del rig y su persistencia en `localStorage`.
+- `src/lib/security.ts` define el guard de túnel: `isTunnelRequest` detecta peticiones que no llegan por loopback y `isAllowedTunnelRequest` solo deja pasar `POST` a `/api/callback/<id>`.
+- `src/middleware.ts` aplica ese guard a todas las peticiones y responde `404` con `cache-control: no-store` cuando el túnel no está permitido.
+- `src/lib/whatsapp.ts` expone `formatWhatsapp`: escapa HTML primero y después inyecta código, enlaces, negritas, cursivas y tachados estilo WhatsApp.
 - `src/scripts/rig.ts` es la lógica de UI: transcript, inspector, pestañas, formulario, destinos guardados y estados de carga/error.
 - `src/styles/global.css` contiene Tailwind 4, el tema de Flowbite, los tokens de la marca y las clases de componente (`.field`, `.btn-primary`, etc.).
 
