@@ -11,6 +11,11 @@ export default defineConfig({
   }),
   vite: {
     plugins: [tailwindcss()],
+    // El control de acceso vive en src/middleware.ts: solo POST /api/callback/<uuid>
+    // pasa cuando la peticion llega por tunel. Aceptamos cualquier Host en dev.
+    server: {
+      allowedHosts: true,
+    },
   },
   devToolbar: {
     enabled: false,

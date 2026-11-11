@@ -1,5 +1,7 @@
 import type { APIRoute } from "astro";
-import { extractReply, validateTarget, type ChatTurn } from "../../lib/webhook";
+import type { PayloadMode } from "../../lib/config";
+import { isTunnelRequest } from "../../lib/security";
+import { buildPayload, extractReply, validateTarget, type ChatTurn } from "../../lib/webhook";
 
 export const prerender = false;
 
@@ -7,6 +9,10 @@ const MAX_BODY_BYTES = 128 * 1024;
 const MAX_UPSTREAM_CHARS = 64 * 1024;
 
 export const POST: APIRoute = async ({ request }) => {
+  if (isTunnelRequest(request)) {
+    return json({ ok: false, error: "El proxy no está disponible a través del túnel." }, 403);
+  }
+
   const started = performance.now();
 
   let input: Record<string, unknown>;
@@ -37,26 +43,39 @@ export const POST: APIRoute = async ({ request }) => {
     : [];
 
   const timeoutMs = clampNumber(input.timeoutMs, 2000, 120000, 30000);
-  const payloadMode = input.payloadMode === "openai" ? "openai" : "simple";
+  const payloadMode: PayloadMode =
+    input.payloadMode === "openai" ? "openai" : input.payloadMode === "sellly" ? "sellly" : "simple";
   const model = typeof input.model === "string" && input.model.trim() ? input.model.trim() : "demo";
   const sessionId = typeof input.sessionId === "string" ? input.sessionId : "";
+  const apiKey = typeof input.apiKey === "string" ? input.apiKey : "";
+  const publicBase = typeof input.publicBase === "string" ? input.publicBase.trim() : "";
+  const executionId = typeof input.executionId === "string" ? input.executionId.trim() : "";
+  const conversationId = typeof input.conversationId === "string" ? input.conversationId : "";
+  const contactId = typeof input.contactId === "string" ? input.contactId : "";
+  const contactExternalId = typeof input.contactExternalId === "string" ? input.contactExternalId : "";
 
-  const payload =
-    payloadMode === "openai"
-      ? {
-          model,
-          messages: [...history, { role: "user" as const, content: message }].map((turn) => ({
-            role: turn.role,
-            content: turn.content,
-          })),
-          stream: false,
-        }
-      : {
-          sessionId,
-          message,
-          history,
-          timestamp: new Date().toISOString(),
-        };
+  const isSellly = payloadMode === "sellly";
+  if (isSellly) {
+    if (!publicBase) {
+      return json({ ok: false, error: "Falta la URL pública del rig para el callback." }, 400);
+    }
+    if (!executionId) {
+      return json({ ok: false, error: "Falta el executionId para el modo Sellly AI." }, 400);
+    }
+  }
+
+  const payload = buildPayload(payloadMode, {
+    message,
+    history,
+    model,
+    sessionId,
+    executionId,
+    publicBase,
+    apiKey,
+    conversationId,
+    contactId,
+    contactExternalId,
+  });
 
   const body = JSON.stringify(payload);
   if (body.length > MAX_BODY_BYTES) {
@@ -68,6 +87,10 @@ export const POST: APIRoute = async ({ request }) => {
     accept: "application/json, text/plain;q=0.9, */*;q=0.8",
     "user-agent": "WebhookRig/1.0",
   };
+
+  if (isSellly && apiKey) {
+    headers["x-api-key"] = apiKey;
+  }
 
   const authName = typeof input.authHeaderName === "string" ? input.authHeaderName.trim() : "";
   const authValue = typeof input.authHeaderValue === "string" ? input.authHeaderValue : "";
@@ -92,7 +115,9 @@ export const POST: APIRoute = async ({ request }) => {
 
     const response = truncate(await upstream.text(), MAX_UPSTREAM_CHARS);
     const contentType = upstream.headers.get("content-type") ?? "";
-    const reply = upstream.ok ? extractReply(response.text, typeof input.responsePath === "string" ? input.responsePath : "") : null;
+    const reply = upstream.ok && !isSellly
+      ? extractReply(response.text, typeof input.responsePath === "string" ? input.responsePath : "")
+      : null;
 
     return json(
       {
@@ -107,9 +132,11 @@ export const POST: APIRoute = async ({ request }) => {
         truncated: response.truncated,
         headers: pickHeaders(upstream.headers),
         error: upstream.ok
-          ? reply
+          ? isSellly
             ? null
-            : "El webhook respondió, pero no encontré texto de respuesta. Revisa la ruta de respuesta."
+            : reply
+              ? null
+              : "El webhook respondió, pero no encontré texto de respuesta. Revisa la ruta de respuesta."
           : `El webhook respondió ${upstream.status} ${upstream.statusText}.`,
       },
       upstream.ok ? 200 : 502,

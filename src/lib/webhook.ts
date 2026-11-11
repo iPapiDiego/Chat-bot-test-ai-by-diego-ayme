@@ -1,4 +1,4 @@
-import type { PayloadMode } from "./config";
+import { createUuid, type PayloadMode } from "./config";
 
 export type Role = "user" | "assistant";
 
@@ -17,8 +17,40 @@ export interface ProbeRequest {
   responsePath?: string;
   timeoutMs?: number;
   sessionId?: string;
+  apiKey?: string;
+  publicBase?: string;
+  executionId?: string;
+  conversationId?: string;
+  contactId?: string;
+  contactExternalId?: string;
   message: string;
   history: ChatTurn[];
+}
+
+export interface SelllyBlock {
+  type: "text" | "image" | "video";
+  text?: string;
+  url?: string;
+  caption?: string;
+}
+
+export interface SelllyCallback {
+  receivedAt: number;
+  observedAt: number;
+  payload: unknown;
+}
+
+export interface BuildPayloadInput {
+  message: string;
+  history: ChatTurn[];
+  model: string;
+  sessionId: string;
+  executionId?: string;
+  publicBase?: string;
+  apiKey?: string;
+  conversationId?: string;
+  contactId?: string;
+  contactExternalId?: string;
 }
 
 export interface ProbeResult {
@@ -42,11 +74,39 @@ export interface ProbeFailure {
   elapsedMs: number;
 }
 
-export function buildPayload(
-  mode: PayloadMode,
-  input: { message: string; history: ChatTurn[]; model: string; sessionId: string },
-): Record<string, unknown> {
+export function buildPayload(mode: PayloadMode, input: BuildPayloadInput): Record<string, unknown> {
   const turns: ChatTurn[] = [...input.history, { role: "user", content: input.message }];
+
+  if (mode === "sellly") {
+    const executionId = input.executionId || createUuid();
+    const base = (input.publicBase ?? "").trim().replace(/\/+$/, "");
+    return {
+      apiKey: input.apiKey ?? "",
+      executionId,
+      callbackUrl: `${base}/api/callback/${executionId}`,
+      systemPrompt: "",
+      message: {
+        body: input.message,
+        type: "TEXT",
+        mediaUrl: null,
+        mediaCaption: null,
+        mediaExpiresAt: null,
+        mediaMimeType: null,
+        mediaFilename: null,
+      },
+      contact: {
+        id: input.contactId ?? "",
+        name: "Tester",
+        phone: "51999999999",
+        email: null,
+        externalId: input.contactExternalId ?? "",
+        waUsername: "tester",
+        metadata: {},
+      },
+      conversation: { id: input.conversationId ?? "", status: "OPEN", mode: "BOT" },
+      variables: {},
+    };
+  }
 
   if (mode === "openai") {
     return {
@@ -62,6 +122,37 @@ export function buildPayload(
     history: input.history,
     timestamp: new Date().toISOString(),
   };
+}
+
+export function normalizeSelllyBlocks(payload: unknown): SelllyBlock[] {
+  const messages = Array.isArray(payload)
+    ? payload
+    : payload && typeof payload === "object" && Array.isArray((payload as { messages?: unknown }).messages)
+      ? ((payload as { messages: unknown[] }).messages)
+      : [];
+
+  const blocks: SelllyBlock[] = [];
+  for (const item of messages) {
+    if (!item || typeof item !== "object") continue;
+    const record = item as Record<string, unknown>;
+    const type = typeof record.type === "string" ? record.type.toLowerCase() : "";
+
+    if (type === "text") {
+      const text =
+        typeof record.text === "string" ? record.text : typeof record.body === "string" ? record.body : "";
+      if (text.trim()) blocks.push({ type: "text", text });
+      continue;
+    }
+
+    if (type === "image" || type === "video") {
+      const url = typeof record.url === "string" ? record.url.trim() : "";
+      if (!url) continue;
+      const caption =
+        typeof record.caption === "string" && record.caption.trim() ? record.caption : undefined;
+      blocks.push({ type, url, caption });
+    }
+  }
+  return blocks;
 }
 
 const REPLY_KEYS = [

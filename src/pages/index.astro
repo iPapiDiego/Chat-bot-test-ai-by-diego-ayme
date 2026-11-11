@@ -121,6 +121,7 @@ import Layout from "../layouts/Layout.astro";
               <select id="field-payload" name="payloadMode" class="field mt-1.5 col-start-2 row-start-2">
                 <option value="simple">Simple</option>
                 <option value="openai">OpenAI chat</option>
+                <option value="sellly">Sellly AI</option>
               </select>
             </div>
             <p id="transport-help" class="help">
@@ -140,6 +141,47 @@ import Layout from "../layouts/Layout.astro";
                 class="field mt-1.5 font-mono text-[12.5px]"
               />
             </div>
+          </section>
+
+          <section id="sellly-wrap" class="hidden space-y-3 border-t border-white/8 pt-5">
+            <h2 class="text-[11px] font-semibold tracking-[0.14em] text-quiet/65 uppercase">
+              Sellly AI
+            </h2>
+            <div>
+              <label class="label" for="field-public-base">URL pública del rig</label>
+              <input
+                id="field-public-base"
+                name="publicBase"
+                type="url"
+                inputmode="url"
+                autocomplete="off"
+                spellcheck="false"
+                placeholder="https://tu-tunel.trycloudflare.com"
+                class="field mt-1.5 font-mono text-[12.5px]"
+              />
+              <p class="help">
+                El túnel de cloudflared que apunta a este rig. Sellly AI llamará a
+                <code class="font-mono text-[11px] text-quiet">/api/callback/&lt;executionId&gt;</code>.
+              </p>
+            </div>
+            <div>
+              <label class="label" for="field-api-key">API key</label>
+              <input
+                id="field-api-key"
+                name="apiKey"
+                type="password"
+                autocomplete="off"
+                spellcheck="false"
+                placeholder="sk-sellly-…"
+                class="field mt-1.5 font-mono text-[12.5px]"
+              />
+              <p class="help">
+                Se envía en el cuerpo y en el header
+                <code class="font-mono text-[11px] text-quiet">x-api-key</code>. Solo se guarda en este
+                navegador.
+              </p>
+            </div>
+            <p id="sellly-error" class="error hidden" role="alert"></p>
           </section>
 
           <section class="space-y-3 border-t border-white/8 pt-5">
@@ -288,7 +330,13 @@ import Layout from "../layouts/Layout.astro";
                 class="hidden items-center gap-1.5 rounded-full border border-white/10 px-2.5 py-1 font-mono text-[11px] text-quiet"
                 ><span class="size-1.5 rounded-full bg-signal"></span><span id="latency-value">0 ms</span></span
               >
-              <button type="button" id="clear-chat" class="icon-btn" aria-label="Vaciar la conversación">
+              <button
+                type="button"
+                id="clear-chat"
+                class="icon-btn"
+                aria-label="Nuevo chat (vacía la conversación y regenera los ids)"
+                title="Nuevo chat"
+              >
                 <svg viewBox="0 0 24 24" fill="none" class="size-4" aria-hidden="true">
                   <path
                     d="M4 7h16M9 7V5h6v2M6.5 7l.8 12.1A2 2 0 0 0 9.3 21h5.4a2 2 0 0 0 2-1.9L17.5 7"
@@ -328,6 +376,28 @@ import Layout from "../layouts/Layout.astro";
                 tal como llega. Ideal para demos en vivo con clientes.
               </p>
               <div id="empty-hints" class="mt-6 grid gap-2 text-start"></div>
+            </div>
+
+            <div
+              id="typing-indicator"
+              class="hidden items-start gap-2"
+            >
+              <div
+                class="flex items-center gap-2.5 rounded-2xl rounded-es-md border border-white/10 bg-white/[0.04] px-4 py-2.5"
+              >
+                <span class="flex items-center gap-1" aria-hidden="true">
+                  <span class="size-1.5 rounded-full bg-quiet animate-pulse-dot"></span>
+                  <span class="size-1.5 rounded-full bg-quiet animate-pulse-dot [animation-delay:150ms]"></span>
+                  <span class="size-1.5 rounded-full bg-quiet animate-pulse-dot [animation-delay:300ms]"></span>
+                </span>
+                <span id="typing-label" class="text-[13px] text-quiet/85">Esperando respuesta</span>
+              </div>
+              <span
+                id="typing-timer"
+                aria-hidden="true"
+                class="mt-1.5 font-mono text-[11.5px] tracking-tight text-quiet/70 tabular-nums"
+                >00:00.0</span
+              >
             </div>
           </div>
 
@@ -391,7 +461,12 @@ import Layout from "../layouts/Layout.astro";
             </button>
           </div>
 
-          <div id="tabs" class="flex gap-1 border-b border-white/8 px-3 pt-2" data-tabs-toggle="#tabs" role="tablist">
+          <div
+            id="tabs"
+            class="flex gap-1 overflow-x-auto border-b border-white/8 px-3 pt-2"
+            data-tabs-toggle="#tabs"
+            role="tablist"
+          >
             <button
               type="button"
               id="tab-reply"
@@ -432,6 +507,26 @@ import Layout from "../layouts/Layout.astro";
               class="rounded-t-md border-b-2 border-transparent px-3 py-2 text-xs font-medium text-quiet transition hover:text-paper"
               >Conexión</button
             >
+            <button
+              type="button"
+              id="tab-callback"
+              role="tab"
+              data-tabs-target="#panel-callback"
+              aria-selected="false"
+              aria-controls="panel-callback"
+              class="shrink-0 rounded-t-md border-b-2 border-transparent px-3 py-2 text-xs font-medium text-quiet transition hover:text-paper"
+              >Callback</button
+            >
+            <button
+              type="button"
+              id="tab-timings"
+              role="tab"
+              data-tabs-target="#panel-timings"
+              aria-selected="false"
+              aria-controls="panel-timings"
+              class="shrink-0 rounded-t-md border-b-2 border-transparent px-3 py-2 text-xs font-medium text-quiet transition hover:text-paper"
+              >Tiempos</button
+            >
           </div>
 
           <div class="flex-1 overflow-y-auto px-4 py-4 sm:px-5">
@@ -452,6 +547,12 @@ import Layout from "../layouts/Layout.astro";
                   id="reply-text"
                   class="rounded-lg border border-white/10 bg-ink-950/60 p-3 font-mono text-[12.5px] leading-relaxed whitespace-pre-wrap break-words text-paper/90"
                 ></pre>
+                <div id="reply-timings" class="hidden rounded-lg border border-white/10 bg-white/[0.02] p-3">
+                  <p class="text-[10.5px] font-semibold tracking-[0.12em] text-quiet/55 uppercase">
+                    Tiempos
+                  </p>
+                  <dl id="reply-timings-list" class="mt-2 space-y-1.5 text-[11.5px]"></dl>
+                </div>
               </div>
             </div>
 
@@ -484,6 +585,66 @@ import Layout from "../layouts/Layout.astro";
               <div class="rounded-lg border border-white/10 bg-white/[0.02] p-3">
                 <p class="text-[11.5px] font-medium text-paper/85">Destino activo</p>
                 <p id="meta-target" class="mt-1 font-mono text-[11.5px] break-all text-quiet/80">Sin configurar</p>
+              </div>
+            </div>
+
+            <div id="panel-callback" role="tabpanel" aria-labelledby="tab-callback" class="hidden space-y-3">
+              <div id="callback-empty" class="rounded-lg border border-dashed border-white/12 px-4 py-8 text-center">
+                <p class="text-sm font-medium text-paper/85">Sin callback todavía</p>
+                <p class="mt-1 text-[12px] leading-relaxed text-quiet/70">
+                  En modo Sellly AI el backend responde un ACK y luego envía el resultado a este rig.
+                </p>
+              </div>
+              <pre
+                id="callback-text"
+                class="hidden max-h-[60vh] overflow-auto rounded-lg border border-white/10 bg-ink-950/60 p-3 font-mono text-[12px] leading-relaxed whitespace-pre-wrap break-all text-paper/85"
+              ></pre>
+            </div>
+
+            <div id="panel-timings" role="tabpanel" aria-labelledby="tab-timings" class="hidden space-y-4">
+              <div class="flex items-center justify-between gap-2">
+                <p class="text-[11.5px] text-quiet/70">Totales de punta a punta</p>
+                <button type="button" id="reset-stats" class="btn-quiet px-2.5 py-1 text-[11.5px]">
+                  Reiniciar
+                </button>
+              </div>
+
+              <dl class="grid grid-cols-2 gap-2 text-[11.5px]">
+                <div class="rounded-lg border border-white/10 bg-white/[0.02] px-3 py-2">
+                  <dt class="text-[10.5px] tracking-[0.12em] text-quiet/55 uppercase">Mensajes</dt>
+                  <dd id="stats-count" class="mt-1 font-mono text-[15px] text-paper">0</dd>
+                </div>
+                <div class="rounded-lg border border-white/10 bg-white/[0.02] px-3 py-2">
+                  <dt class="text-[10.5px] tracking-[0.12em] text-quiet/55 uppercase">Último</dt>
+                  <dd id="stats-last" class="mt-1 font-mono text-[15px] text-paper">—</dd>
+                </div>
+                <div class="rounded-lg border border-white/10 bg-white/[0.02] px-3 py-2">
+                  <dt class="text-[10.5px] tracking-[0.12em] text-quiet/55 uppercase">Promedio</dt>
+                  <dd id="stats-avg" class="mt-1 font-mono text-[15px] text-paper">—</dd>
+                </div>
+                <div class="rounded-lg border border-white/10 bg-white/[0.02] px-3 py-2">
+                  <dt class="text-[10.5px] tracking-[0.12em] text-quiet/55 uppercase">Mínimo</dt>
+                  <dd id="stats-min" class="mt-1 font-mono text-[15px] text-paper">—</dd>
+                </div>
+                <div class="rounded-lg border border-white/10 bg-white/[0.02] px-3 py-2">
+                  <dt class="text-[10.5px] tracking-[0.12em] text-quiet/55 uppercase">Máximo</dt>
+                  <dd id="stats-max" class="mt-1 font-mono text-[15px] text-paper">—</dd>
+                </div>
+                <div class="rounded-lg border border-white/10 bg-white/[0.02] px-3 py-2">
+                  <dt class="text-[10.5px] tracking-[0.12em] text-quiet/55 uppercase">p50</dt>
+                  <dd id="stats-p50" class="mt-1 font-mono text-[15px] text-paper">—</dd>
+                </div>
+                <div class="rounded-lg border border-white/10 bg-white/[0.02] px-3 py-2">
+                  <dt class="text-[10.5px] tracking-[0.12em] text-quiet/55 uppercase">p95</dt>
+                  <dd id="stats-p95" class="mt-1 font-mono text-[15px] text-paper">—</dd>
+                </div>
+              </dl>
+
+              <div>
+                <p class="text-[10.5px] font-semibold tracking-[0.12em] text-quiet/55 uppercase">
+                  Últimos 20
+                </p>
+                <ol id="stats-list" class="mt-2 space-y-1"></ol>
               </div>
             </div>
           </div>

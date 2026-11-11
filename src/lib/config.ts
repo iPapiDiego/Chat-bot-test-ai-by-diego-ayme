@@ -1,5 +1,5 @@
 export type Transport = "proxy" | "direct";
-export type PayloadMode = "simple" | "openai";
+export type PayloadMode = "simple" | "openai" | "sellly";
 
 export interface SavedTarget {
   id: string;
@@ -17,6 +17,11 @@ export interface RigConfig {
   responsePath: string;
   timeoutMs: number;
   sessionId: string;
+  publicBase: string;
+  apiKey: string;
+  conversationId: string;
+  contactId: string;
+  contactExternalId: string;
   saved: SavedTarget[];
 }
 
@@ -32,12 +37,32 @@ export const DEFAULT_CONFIG: RigConfig = {
   responsePath: "",
   timeoutMs: 30000,
   sessionId: "",
+  publicBase: "",
+  apiKey: "",
+  conversationId: "",
+  contactId: "",
+  contactExternalId: "",
   saved: [],
 };
 
 export function createSessionId(): string {
   const random = Math.random().toString(36).slice(2, 8);
   return `sess_${Date.now().toString(36)}_${random}`;
+}
+
+export function createUuid(): string {
+  if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
+    return crypto.randomUUID();
+  }
+  return "xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx".replace(/[xy]/g, (char) => {
+    const random = (Math.random() * 16) | 0;
+    const value = char === "x" ? random : (random & 0x3) | 0x8;
+    return value.toString(16);
+  });
+}
+
+function orUuid(value: unknown): string {
+  return typeof value === "string" && value.trim() ? value : createUuid();
 }
 
 export function normalizeUrl(raw: string): string {
@@ -81,7 +106,13 @@ export function targetLabel(raw: string): string {
 }
 
 export function loadConfig(): RigConfig {
-  const fallback: RigConfig = { ...DEFAULT_CONFIG, sessionId: createSessionId() };
+  const fallback: RigConfig = {
+    ...DEFAULT_CONFIG,
+    sessionId: createSessionId(),
+    conversationId: createUuid(),
+    contactId: createUuid(),
+    contactExternalId: createUuid(),
+  };
   if (typeof localStorage === "undefined") return fallback;
 
   try {
@@ -94,9 +125,15 @@ export function loadConfig(): RigConfig {
       ...parsed,
       timeoutMs: clampTimeout(parsed.timeoutMs),
       transport: parsed.transport === "direct" ? "direct" : "proxy",
-      payloadMode: parsed.payloadMode === "openai" ? "openai" : "simple",
+      payloadMode:
+        parsed.payloadMode === "openai" ? "openai" : parsed.payloadMode === "sellly" ? "sellly" : "simple",
       saved: Array.isArray(parsed.saved) ? parsed.saved.filter(isSavedTarget) : [],
       sessionId: parsed.sessionId || fallback.sessionId,
+      publicBase: typeof parsed.publicBase === "string" ? parsed.publicBase : "",
+      apiKey: typeof parsed.apiKey === "string" ? parsed.apiKey : "",
+      conversationId: orUuid(parsed.conversationId),
+      contactId: orUuid(parsed.contactId),
+      contactExternalId: orUuid(parsed.contactExternalId),
     };
   } catch {
     return fallback;
