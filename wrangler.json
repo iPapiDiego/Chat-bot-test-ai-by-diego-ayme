@@ -8,7 +8,8 @@
   },
   "kv_namespaces": [
     {
-      "binding": "CALLBACKS"
+      "binding": "CALLBACKS",
+      "id": "90d729043f7946c19331d0a7e2b7d31e"
     }
   ]
 }
