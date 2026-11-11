@@ -1,5 +1,7 @@
 const LOCAL_HOSTS = new Set(["localhost", "127.0.0.1", "[::1]", "::1"]);
 
+const TUNNEL_HOST_SUFFIXES = [".trycloudflare.com"];
+
 const TUNNEL_HEADERS = ["cf-connecting-ip", "cf-ray", "x-forwarded-for", "cf-visitor"];
 
 export const CALLBACK_PATH = /^\/api\/callback\/[^/]+\/?$/;
@@ -19,8 +21,16 @@ function isLoopbackAddress(value: string): boolean {
 
 export function isTunnelRequest(request: Request): boolean {
   const host = request.headers.get("host");
-  if (!host || !LOCAL_HOSTS.has(stripPort(host.trim().toLowerCase()))) {
+  if (!host) return false;
+
+  const hostname = stripPort(host.trim().toLowerCase());
+
+  if (TUNNEL_HOST_SUFFIXES.some((suffix) => hostname.endsWith(suffix))) {
     return true;
+  }
+
+  if (!LOCAL_HOSTS.has(hostname)) {
+    return false;
   }
 
   for (const name of TUNNEL_HEADERS) {

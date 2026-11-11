@@ -59,6 +59,8 @@ npm run deploy
 
 `npm run deploy` compila y publica. La primera vez, Wrangler te pedirá confirmar el nombre del Worker (`webhook-rig`, configurado en `wrangler.json`). Al terminar te dará una URL `https://webhook-rig.<tu-subdominio>.workers.dev`.
 
+Despliega con `wrangler` desde el repo. Subir `dist/` a mano o crear un proyecto de Pages no funciona: el SSR necesita el Worker con su binding `ASSETS`, que solo genera `wrangler deploy` (o Workers Builds con build `npm run build` y deploy `npx wrangler deploy`).
+
 Otros comandos útiles:
 
 | Comando | Qué hace |
@@ -72,7 +74,9 @@ Otros comandos útiles:
 
 El proxy **bloquea direcciones privadas** (localhost, `10.x`, `192.168.x`, `172.16-31.x`, `169.254.x`, `::1`, IPv6 internas) para evitar SSRF contra la red interna de Cloudflare. En producción, usa una URL pública.
 
-Si de verdad necesitas apuntar a una red privada desde el deploy, define la variable `ALLOW_PRIVATE_TARGETS=true` en el Worker. No la actives en un sitio abierto al público.
+Si de verdad necesitas apuntar a una red privada desde el deploy, compila con `ALLOW_PRIVATE_TARGETS=true npm run deploy`. Es una variable de build (`import.meta.env`), no una var del Worker en runtime. No la actives en un sitio abierto al público.
+
+El Worker desplegado sirve la UI con normalidad. `src/middleware.ts` solo bloquea peticiones que llegan por un túnel (`*.trycloudflare.com`, o loopback con cabeceras de Cloudflare): ahí únicamente pasa `POST /api/callback/<uuid>` para no exponer el rig.
 
 Alternativa para probar un webhook que solo existe en tu máquina, estando desplegado: cambia el transporte a **Directo** y expón tu servicio con un túnel (por ejemplo `cloudflared tunnel --url http://localhost:4319`). El navegador llamará al túnel público directamente.
 
@@ -82,7 +86,7 @@ No requiere secretos para funcionar. Opcionales:
 
 | Variable | Valor | Efecto |
 | --- | --- | --- |
-| `ALLOW_PRIVATE_TARGETS` | `true` | Permite que el proxy llame direcciones privadas en producción |
+| `ALLOW_PRIVATE_TARGETS` | `true` | Permite que el proxy llame direcciones privadas en producción. Se aplica en build, no como var de runtime |
 
 Los tokens de tus webhooks (por ejemplo `Authorization: Bearer …`) se guardan en el navegador del usuario y viajan en la petición de cada prueba. No se almacenan en el servidor, pero **sí pasan por el proxy**: si el endpoint de demo tiene credenciales sensibles, usa el transporte directo o limita el token.
 
