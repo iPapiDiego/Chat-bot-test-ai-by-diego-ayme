@@ -1,0 +1,9 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "webhook-rig",
+  "compatibility_date": "2026-11-03",
+  "compatibility_flags": ["nodejs_als"],
+  "observability": {
+    "enabled": true
+  }
+}

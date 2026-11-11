@@ -1,11 +1,498 @@
 ---
-import Welcome from '../components/Welcome.astro';
-import Layout from '../layouts/Layout.astro';
-
-// Welcome to Astro! Wondering what to do next? Check out the Astro documentation at https://docs.astro.build
-// Don't want to use any of this? Delete everything in this file, the `assets`, `components`, and `layouts` directories, and start fresh.
+import Layout from "../layouts/Layout.astro";
 ---
 
 <Layout>
-	<Welcome />
+  <div class="flex h-dvh flex-col overflow-hidden">
+    <header class="z-30 shrink-0 border-b border-white/8 bg-ink-950/85 backdrop-blur-xl">
+      <div class="mx-auto flex h-16 w-full max-w-[1600px] items-center gap-4 px-4 sm:px-6">
+        <a href="/" class="flex min-w-0 items-center gap-3">
+          <span
+            class="grid size-9 shrink-0 place-items-center rounded-lg border border-signal/25 bg-signal/10 text-signal"
+            aria-hidden="true"
+          >
+            <svg viewBox="0 0 24 24" fill="none" class="size-5">
+              <path
+                d="M4 7.5A2.5 2.5 0 0 1 6.5 5h11A2.5 2.5 0 0 1 20 7.5v7a2.5 2.5 0 0 1-2.5 2.5H10l-4.2 3.1c-.6.4-1.3 0-1.3-.7V17H6.5A2.5 2.5 0 0 1 4 14.5v-7Z"
+                stroke="currentColor"
+                stroke-width="1.6"
+                stroke-linejoin="round"
+              ></path>
+              <path d="M8.5 9.5h7M8.5 12.5h4" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"
+              ></path>
+            </svg>
+          </span>
+          <span class="min-w-0">
+            <span class="block truncate text-sm font-semibold tracking-tight text-paper">Webhook Rig</span>
+            <span class="hidden text-[11.5px] text-quiet/70 sm:block">Laboratorio de chatbots</span>
+          </span>
+        </a>
+
+        <div class="ml-auto flex items-center gap-2">
+          <div
+            id="connection-pill"
+            class="hidden items-center gap-2 rounded-full border border-white/10 bg-white/[0.03] px-3 py-1.5 text-[11.5px] text-quiet md:flex"
+          >
+            <span id="connection-dot" class="size-1.5 rounded-full bg-quiet/50"></span>
+            <span id="connection-label" class="max-w-[220px] truncate">Sin webhook configurado</span>
+          </div>
+
+          <div class="flex items-center rounded-lg border border-white/10 p-0.5 lg:hidden" role="group" aria-label="Vista">
+            <button
+              type="button"
+              data-view-btn="chat"
+              class="rounded-md px-3 py-1.5 text-xs font-medium text-paper transition aria-[pressed=true]:bg-white/10"
+              aria-pressed="true">Chat</button
+            >
+            <button
+              type="button"
+              data-view-btn="inspect"
+              class="rounded-md px-3 py-1.5 text-xs font-medium text-quiet transition hover:text-paper aria-[pressed=true]:bg-white/10 aria-[pressed=true]:text-paper"
+              aria-pressed="false">Inspector</button
+            >
+          </div>
+
+          <button
+            type="button"
+            id="open-config"
+            class="btn-quiet lg:hidden"
+            aria-controls="config-panel"
+            aria-expanded="false"
+          >
+            <svg viewBox="0 0 24 24" fill="none" class="size-4" aria-hidden="true">
+              <path
+                d="M4 7h10m4 0h2M4 17h2m4 0h10M14 4v6M8 14v6"
+                stroke="currentColor"
+                stroke-width="1.7"
+                stroke-linecap="round"></path>
+            </svg>
+            <span class="sr-only sm:not-sr-only">Configurar</span>
+          </button>
+        </div>
+      </div>
+    </header>
+
+    <div class="mx-auto flex min-h-0 w-full max-w-[1600px] flex-1 flex-col lg:flex-row">
+      <aside
+        id="config-panel"
+        aria-label="Configuración del webhook"
+        class="fixed inset-x-0 top-16 bottom-0 z-20 hidden w-full overflow-y-auto border-b border-white/8 bg-ink-950 lg:static lg:block lg:w-[336px] lg:shrink-0 lg:overflow-y-auto lg:border-r lg:border-b-0 lg:bg-ink-900/40"
+      >
+        <form id="rig-form" class="flex flex-col gap-6 p-4 sm:p-5" novalidate>
+          <div class="flex items-center justify-between lg:hidden">
+            <p class="text-sm font-semibold text-paper">Configuración</p>
+            <button type="button" id="close-config" class="icon-btn" aria-label="Cerrar configuración">
+              <svg viewBox="0 0 24 24" fill="none" class="size-4" aria-hidden="true">
+                <path d="M6 6l12 12M18 6 6 18" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"></path>
+              </svg>
+            </button>
+          </div>
+          <section class="space-y-3">
+            <div class="flex items-baseline justify-between gap-3">
+              <h2 class="text-[11px] font-semibold tracking-[0.14em] text-quiet/65 uppercase">Destino</h2>
+              <span id="url-state" class="text-[11px] text-quiet/60">pendiente</span>
+            </div>
+
+            <div>
+              <label class="label" for="field-url">URL del webhook</label>
+              <input
+                id="field-url"
+                name="url"
+                type="url"
+                inputmode="url"
+                autocomplete="off"
+                spellcheck="false"
+                placeholder="https://tu-worker.workers.dev/chat"
+                class="field mt-1.5 font-mono text-[12.5px]"
+              />
+              <p id="url-error" class="error hidden" role="alert"></p>
+              <p class="help">
+                Pega aquí el endpoint que quieres probar. Se guarda solo en este navegador.
+              </p>
+            </div>
+
+            <div class="grid grid-cols-2 gap-2">
+              <label class="label" for="field-transport">Transporte</label>
+              <label class="label" for="field-payload">Formato</label>
+              <select id="field-transport" name="transport" class="field mt-1.5 col-start-1 row-start-2">
+                <option value="proxy">Proxy</option>
+                <option value="direct">Directo</option>
+              </select>
+              <select id="field-payload" name="payloadMode" class="field mt-1.5 col-start-2 row-start-2">
+                <option value="simple">Simple</option>
+                <option value="openai">OpenAI chat</option>
+              </select>
+            </div>
+            <p id="transport-help" class="help">
+              El proxy evita CORS y permite cualquier dominio. El modo directo solo funciona si tu
+              webhook responde con cabeceras CORS abiertas.
+            </p>
+
+            <div id="model-wrap" class="hidden">
+              <label class="label" for="field-model">Modelo</label>
+              <input
+                id="field-model"
+                name="model"
+                type="text"
+                autocomplete="off"
+                spellcheck="false"
+                placeholder="gpt-4o-mini"
+                class="field mt-1.5 font-mono text-[12.5px]"
+              />
+            </div>
+          </section>
+
+          <section class="space-y-3 border-t border-white/8 pt-5">
+            <h2 class="text-[11px] font-semibold tracking-[0.14em] text-quiet/65 uppercase">
+              Autenticación
+            </h2>
+            <div class="grid grid-cols-[minmax(0,0.9fr)_minmax(0,1.1fr)] gap-2">
+              <div>
+                <label class="label" for="field-auth-name">Header</label>
+                <input
+                  id="field-auth-name"
+                  name="authHeaderName"
+                  type="text"
+                  autocomplete="off"
+                  spellcheck="false"
+                  placeholder="Authorization"
+                  class="field mt-1.5 font-mono text-[12.5px]"
+                />
+              </div>
+              <div>
+                <label class="label" for="field-auth-value">Valor</label>
+                <div class="relative">
+                  <input
+                    id="field-auth-value"
+                    name="authHeaderValue"
+                    type="password"
+                    autocomplete="off"
+                    spellcheck="false"
+                    placeholder="Bearer sk-…"
+                    class="field mt-1.5 pr-10 font-mono text-[12.5px]"
+                  />
+                  <button
+                    type="button"
+                    id="toggle-secret"
+                    class="absolute end-1.5 bottom-1.5 grid size-7 place-items-center rounded-md text-quiet transition hover:bg-white/10 hover:text-paper"
+                    aria-label="Mostrar u ocultar el valor del header"
+                    aria-pressed="false"
+                  >
+                    <svg viewBox="0 0 24 24" fill="none" class="size-4" aria-hidden="true">
+                      <path
+                        d="M2.5 12S6 5.5 12 5.5 21.5 12 21.5 12 18 18.5 12 18.5 2.5 12 2.5 12Z"
+                        stroke="currentColor"
+                        stroke-width="1.6"
+                        stroke-linejoin="round"></path>
+                      <circle cx="12" cy="12" r="2.8" stroke="currentColor" stroke-width="1.6"></circle>
+                    </svg>
+                  </button>
+                </div>
+              </div>
+            </div>
+            <p class="help">Si tu webhook pide token, escríbelo aquí. Nunca se envía al servidor de esta app.</p>
+          </section>
+
+          <section class="space-y-3 border-t border-white/8 pt-5">
+            <h2 class="text-[11px] font-semibold tracking-[0.14em] text-quiet/65 uppercase">
+              Lectura de respuesta
+            </h2>
+            <div class="grid grid-cols-[minmax(0,1fr)_96px] gap-2">
+              <div>
+                <label class="label" for="field-response-path">Ruta del texto</label>
+                <input
+                  id="field-response-path"
+                  name="responsePath"
+                  type="text"
+                  autocomplete="off"
+                  spellcheck="false"
+                  placeholder="data.reply"
+                  class="field mt-1.5 font-mono text-[12.5px]"
+                />
+              </div>
+              <div>
+                <label class="label" for="field-timeout">Timeout</label>
+                <div class="relative">
+                  <input
+                    id="field-timeout"
+                    name="timeoutMs"
+                    type="number"
+                    min="2"
+                    max="120"
+                    step="1"
+                    class="field mt-1.5 pr-7 font-mono text-[12.5px]"
+                  />
+                  <span class="pointer-events-none absolute end-2.5 bottom-2 text-[11px] text-quiet/60">s</span>
+                </div>
+              </div>
+            </div>
+            <p class="help">
+              Déjalo vacío si la respuesta trae <code class="font-mono text-[11px] text-quiet">reply</code>,
+              <code class="font-mono text-[11px] text-quiet">message</code> o formato OpenAI.
+            </p>
+          </section>
+
+          <section class="space-y-3 border-t border-white/8 pt-5">
+            <div class="flex items-baseline justify-between">
+              <h2 class="text-[11px] font-semibold tracking-[0.14em] text-quiet/65 uppercase">
+                Destinos guardados
+              </h2>
+              <span id="saved-count" class="text-[11px] text-quiet/50">0</span>
+            </div>
+            <ul id="saved-list" class="space-y-1.5"></ul>
+            <button type="button" id="save-target" class="btn-quiet w-full">
+              <svg viewBox="0 0 24 24" fill="none" class="size-4" aria-hidden="true">
+                <path
+                  d="M5 4h11l3 3v13H5V4Z"
+                  stroke="currentColor"
+                  stroke-width="1.6"
+                  stroke-linejoin="round"></path>
+                <path d="M8 4v5h7V4M8 20v-6h8v6" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"
+                ></path>
+              </svg>
+              Guardar webhook actual
+            </button>
+          </section>
+
+          <div class="flex gap-2 border-t border-white/8 pt-5">
+            <button type="submit" class="btn-primary flex-1">Guardar ajustes</button>
+            <button type="button" id="reset-rig" class="btn-quiet" aria-label="Restablecer ajustes">
+              <svg viewBox="0 0 24 24" fill="none" class="size-4" aria-hidden="true">
+                <path
+                  d="M4 12a8 8 0 1 1 2.6 5.9M4 18v-6h6"
+                  stroke="currentColor"
+                  stroke-width="1.7"
+                  stroke-linecap="round"
+                  stroke-linejoin="round"></path>
+              </svg>
+            </button>
+          </div>
+          <p id="save-flash" class="hidden -mt-2 text-[11.5px] text-signal" role="status"></p>
+        </form>
+      </aside>
+
+      <main class="flex min-h-0 flex-1 flex-col xl:flex-row">
+        <section
+          data-view-panel="chat"
+          aria-label="Conversación de prueba"
+          class="flex min-h-0 flex-1 flex-col border-white/8 xl:border-r"
+        >
+          <div class="flex items-center gap-3 border-b border-white/8 px-4 py-3 sm:px-6">
+            <div class="min-w-0">
+              <h1 class="truncate text-sm font-semibold text-paper">Sala de pruebas</h1>
+              <p id="session-label" class="truncate text-[11.5px] text-quiet/60">Sesión nueva</p>
+            </div>
+            <div class="ml-auto flex items-center gap-2">
+              <span
+                id="latency-pill"
+                class="hidden items-center gap-1.5 rounded-full border border-white/10 px-2.5 py-1 font-mono text-[11px] text-quiet"
+                ><span class="size-1.5 rounded-full bg-signal"></span><span id="latency-value">0 ms</span></span
+              >
+              <button type="button" id="clear-chat" class="icon-btn" aria-label="Vaciar la conversación">
+                <svg viewBox="0 0 24 24" fill="none" class="size-4" aria-hidden="true">
+                  <path
+                    d="M4 7h16M9 7V5h6v2M6.5 7l.8 12.1A2 2 0 0 0 9.3 21h5.4a2 2 0 0 0 2-1.9L17.5 7"
+                    stroke="currentColor"
+                    stroke-width="1.6"
+                    stroke-linecap="round"
+                    stroke-linejoin="round"></path>
+                </svg>
+              </button>
+            </div>
+          </div>
+
+          <div
+            id="transcript"
+            class="flex-1 space-y-4 overflow-y-auto px-4 py-5 sm:px-6"
+            role="log"
+            aria-live="polite"
+            aria-relevant="additions text"
+          >
+            <div id="empty-state" class="mx-auto flex h-full max-w-md flex-col justify-center py-8 text-center">
+              <div
+                class="mx-auto grid size-12 place-items-center rounded-xl border border-white/10 bg-white/[0.03] text-signal"
+              >
+                <svg viewBox="0 0 24 24" fill="none" class="size-6" aria-hidden="true">
+                  <path
+                    d="m13 2-9 12h7l-1 8 9-12h-7l1-8Z"
+                    stroke="currentColor"
+                    stroke-width="1.6"
+                    stroke-linejoin="round"></path>
+                </svg>
+              </div>
+              <h2 class="mt-5 text-lg font-semibold tracking-tight text-paper">
+                Conecta un webhook y empieza a probar
+              </h2>
+              <p class="mt-2 text-sm leading-relaxed text-quiet/85">
+                Este laboratorio envía tus mensajes al endpoint que configures y muestra la respuesta
+                tal como llega. Ideal para demos en vivo con clientes.
+              </p>
+              <div id="empty-hints" class="mt-6 grid gap-2 text-start"></div>
+            </div>
+          </div>
+
+          <div class="border-t border-white/8 bg-ink-900/30 px-4 pt-3 pb-4 sm:px-6">
+            <form id="composer" class="relative">
+              <label class="sr-only" for="message-input">Mensaje para el chatbot</label>
+              <div
+                class="rounded-xl border border-white/10 bg-ink-900/70 transition focus-within:border-signal/45 focus-within:ring-2 focus-within:ring-signal/10"
+              >
+                <textarea
+                  id="message-input"
+                  name="message"
+                  rows="1"
+                  placeholder="Escribe un mensaje para el chatbot…"
+                  class="block max-h-40 w-full resize-none bg-transparent px-4 pt-3 pb-2 text-[15px] leading-6 text-paper placeholder:text-quiet/45 focus:outline-none"
+                  autocomplete="off"
+                  spellcheck="false"
+                ></textarea>
+                <div class="flex items-center gap-2 px-3 pb-2.5">
+                  <p class="hidden text-[11px] text-quiet/55 sm:block">
+                    <kbd>Enter</kbd> envía · <kbd>Shift</kbd>+<kbd>Enter</kbd> salto de línea
+                  </p>
+                  <div class="ml-auto flex items-center gap-2">
+                    <span id="char-count" class="hidden font-mono text-[11px] text-quiet/45"></span>
+                    <button type="submit" id="send-button" class="btn-primary h-9 px-3.5">
+                      <span id="send-label">Enviar</span>
+                      <svg viewBox="0 0 24 24" fill="none" class="size-4" aria-hidden="true">
+                        <path
+                          d="M4.5 12h13m0 0-4.6-4.6M17.5 12l-4.6 4.6"
+                          stroke="currentColor"
+                          stroke-width="1.8"
+                          stroke-linecap="round"
+                          stroke-linejoin="round"></path>
+                      </svg>
+                    </button>
+                  </div>
+                </div>
+              </div>
+            </form>
+            <p id="composer-note" class="mt-2 text-[11.5px] text-quiet/55">
+              Sin webhook guardado, los mensajes no salen de tu navegador.
+            </p>
+          </div>
+        </section>
+
+        <section
+          data-view-panel="inspect"
+          aria-label="Inspector de respuestas"
+          class="hidden min-h-0 w-full shrink-0 flex-col xl:flex xl:w-[420px]"
+        >
+          <div class="flex items-center gap-2 border-b border-white/8 px-4 py-3 sm:px-5">
+            <h2 class="text-sm font-semibold text-paper">Inspector</h2>
+            <span id="inspect-status" class="rounded-full border border-white/10 px-2 py-0.5 font-mono text-[10.5px] text-quiet/70"
+              >idle</span
+            >
+            <button type="button" id="copy-inspect" class="icon-btn ml-auto" aria-label="Copiar contenido del inspector">
+              <svg viewBox="0 0 24 24" fill="none" class="size-4" aria-hidden="true">
+                <rect x="9" y="9" width="11" height="11" rx="2" stroke="currentColor" stroke-width="1.6"></rect>
+                <path d="M15 6.5V5a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v7a2 2 0 0 0 2 2h1.5" stroke="currentColor" stroke-width="1.6"></path>
+              </svg>
+            </button>
+          </div>
+
+          <div id="tabs" class="flex gap-1 border-b border-white/8 px-3 pt-2" data-tabs-toggle="#tabs" role="tablist">
+            <button
+              type="button"
+              id="tab-reply"
+              role="tab"
+              data-tabs-target="#panel-reply"
+              aria-selected="true"
+              aria-controls="panel-reply"
+              class="rounded-t-md border-b-2 border-signal px-3 py-2 text-xs font-medium text-paper"
+              >Respuesta</button
+            >
+            <button
+              type="button"
+              id="tab-raw"
+              role="tab"
+              data-tabs-target="#panel-raw"
+              aria-selected="false"
+              aria-controls="panel-raw"
+              class="rounded-t-md border-b-2 border-transparent px-3 py-2 text-xs font-medium text-quiet transition hover:text-paper"
+              >Crudo</button
+            >
+            <button
+              type="button"
+              id="tab-request"
+              role="tab"
+              data-tabs-target="#panel-request"
+              aria-selected="false"
+              aria-controls="panel-request"
+              class="rounded-t-md border-b-2 border-transparent px-3 py-2 text-xs font-medium text-quiet transition hover:text-paper"
+              >Petición</button
+            >
+            <button
+              type="button"
+              id="tab-meta"
+              role="tab"
+              data-tabs-target="#panel-meta"
+              aria-selected="false"
+              aria-controls="panel-meta"
+              class="rounded-t-md border-b-2 border-transparent px-3 py-2 text-xs font-medium text-quiet transition hover:text-paper"
+              >Conexión</button
+            >
+          </div>
+
+          <div class="flex-1 overflow-y-auto px-4 py-4 sm:px-5">
+            <div id="panel-reply" role="tabpanel" aria-labelledby="tab-reply" class="space-y-3">
+              <div id="reply-empty" class="rounded-lg border border-dashed border-white/12 px-4 py-8 text-center">
+                <p class="text-sm font-medium text-paper/85">Aún no hay respuestas</p>
+                <p class="mt-1 text-[12px] leading-relaxed text-quiet/70">
+                  Envía un mensaje y aquí verás el texto final después de aplicar la ruta de respuesta.
+                </p>
+              </div>
+              <div id="reply-content" class="hidden space-y-3">
+                <div class="flex flex-wrap items-center gap-2 text-[11px] text-quiet/70">
+                  <span id="reply-meta-status" class="rounded border border-white/10 px-1.5 py-0.5 font-mono"></span>
+                  <span id="reply-meta-time" class="font-mono"></span>
+                  <span id="reply-meta-type" class="truncate font-mono"></span>
+                </div>
+                <pre
+                  id="reply-text"
+                  class="rounded-lg border border-white/10 bg-ink-950/60 p-3 font-mono text-[12.5px] leading-relaxed whitespace-pre-wrap break-words text-paper/90"
+                ></pre>
+              </div>
+            </div>
+
+            <div id="panel-raw" role="tabpanel" aria-labelledby="tab-raw" class="hidden space-y-3">
+              <div id="raw-empty" class="rounded-lg border border-dashed border-white/12 px-4 py-8 text-center">
+                <p class="text-sm font-medium text-paper/85">Sin tráfico todavía</p>
+                <p class="mt-1 text-[12px] leading-relaxed text-quiet/70">
+                  El cuerpo exacto que devolvió tu webhook aparecerá aquí.
+                </p>
+              </div>
+              <pre
+                id="raw-text"
+                class="hidden max-h-[60vh] overflow-auto rounded-lg border border-white/10 bg-ink-950/60 p-3 font-mono text-[12px] leading-relaxed whitespace-pre-wrap break-all text-paper/85"
+              ></pre>
+            </div>
+
+            <div id="panel-request" role="tabpanel" aria-labelledby="tab-request" class="hidden space-y-2">
+              <p class="text-[11.5px] leading-relaxed text-quiet/70">
+                Esto es lo que se envió en el último mensaje.
+              </p>
+              <pre
+                id="request-text"
+                class="rounded-lg border border-white/10 bg-ink-950/60 p-3 font-mono text-[12px] leading-relaxed whitespace-pre-wrap break-all text-paper/85"
+                >{}</pre
+              >
+            </div>
+
+            <div id="panel-meta" role="tabpanel" aria-labelledby="tab-meta" class="hidden space-y-4">
+              <dl id="meta-list" class="space-y-2 text-[12px]"></dl>
+              <div class="rounded-lg border border-white/10 bg-white/[0.02] p-3">
+                <p class="text-[11.5px] font-medium text-paper/85">Destino activo</p>
+                <p id="meta-target" class="mt-1 font-mono text-[11.5px] break-all text-quiet/80">Sin configurar</p>
+              </div>
+            </div>
+          </div>
+        </section>
+      </main>
+    </div>
+  </div>
+
+  <script>
+    import "../scripts/rig";
+  </script>
 </Layout>
