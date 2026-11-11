@@ -57,7 +57,9 @@ npx wrangler login   # solo la primera vez
 npm run deploy
 ```
 
-`npm run deploy` compila y publica. La primera vez, Wrangler te pedirá confirmar el nombre del Worker (`webhook-rig`, configurado en `wrangler.json`). Al terminar te dará una URL `https://webhook-rig.<tu-subdominio>.workers.dev`.
+`npm run deploy` compila y publica. El nombre del Worker (`chat-bot-test-ai-by-diego-ayme`) y el binding KV `CALLBACKS` viven en `wrangler.json`. Al terminar te dará una URL `https://chat-bot-test-ai-by-diego-ayme.<tu-subdominio>.workers.dev`.
+
+Los callbacks se guardan en Workers KV (namespace `CALLBACKS`, clave `callback:<executionId>`, TTL de 10 min), no en memoria del isolate: `POST` y `GET` pueden caer en isolates distintos. Si el namespace no existe, créalo con `npx wrangler kv namespace create CALLBACKS` y pon el `id` en el binding.
 
 Despliega con `wrangler` desde el repo. Subir `dist/` a mano o crear un proyecto de Pages no funciona: el SSR necesita el Worker con su binding `ASSETS`, que solo genera `wrangler deploy` (o Workers Builds con build `npm run build` y deploy `npx wrangler deploy`).
 

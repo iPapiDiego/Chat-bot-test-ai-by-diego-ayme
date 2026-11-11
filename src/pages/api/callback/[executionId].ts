@@ -1,42 +1,10 @@
 import type { APIRoute } from "astro";
+import { readCallback, saveCallback, type CallbackEntry } from "../../../lib/callback-store";
 
 export const prerender = false;
 
-const TTL_MS = 10 * 60 * 1000;
 const MAX_BODY_BYTES = 256 * 1024;
-const MAX_ENTRIES = 500;
 const EXECUTION_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
-
-interface CallbackEntry {
-  receivedAt: number;
-  payload: unknown;
-}
-
-declare global {
-  var __selllyCallbackStore: Map<string, CallbackEntry> | undefined;
-}
-
-const store = (globalThis.__selllyCallbackStore ??= new Map<string, CallbackEntry>());
-
-function sweep(now: number): void {
-  for (const [key, entry] of store) {
-    if (now - entry.receivedAt > TTL_MS) store.delete(key);
-  }
-}
-
-function evictOldest(): void {
-  let oldestKey: string | null = null;
-  let oldestTime = Number.POSITIVE_INFINITY;
-
-  for (const [key, entry] of store) {
-    if (entry.receivedAt < oldestTime) {
-      oldestTime = entry.receivedAt;
-      oldestKey = key;
-    }
-  }
-
-  if (oldestKey !== null) store.delete(oldestKey);
-}
 
 function executionIdFrom(value: string | undefined): string | null {
   if (!value || !EXECUTION_ID.test(value)) return null;
@@ -147,30 +115,28 @@ export const POST: APIRoute = async ({ params, request }) => {
     );
   }
 
-  const now = Date.now();
-  sweep(now);
-
-  if (!store.has(executionId)) {
-    while (store.size >= MAX_ENTRIES) {
-      evictOldest();
-    }
+  try {
+    await saveCallback(executionId, { receivedAt: Date.now(), payload });
+  } catch {
+    return Response.json({ ok: false, error: "No se pudo guardar el callback." }, { status: 500 });
   }
-
-  store.set(executionId, { receivedAt: now, payload });
 
   return Response.json({ ok: true }, { status: 200 });
 };
 
-export const GET: APIRoute = ({ params }) => {
+export const GET: APIRoute = async ({ params }) => {
   const executionId = executionIdFrom(params.executionId);
   if (!executionId) {
     return Response.json({ ok: false, error: "executionId inválido." }, { status: 400 });
   }
 
-  const now = Date.now();
-  sweep(now);
+  let entry: CallbackEntry | null;
+  try {
+    entry = await readCallback(executionId);
+  } catch {
+    return Response.json({ ok: false, error: "No se pudo leer el callback." }, { status: 500 });
+  }
 
-  const entry = store.get(executionId);
   if (!entry) {
     return Response.json({ ok: false, error: "Todavía no llegó el callback." }, { status: 404 });
   }

@@ -1,9 +1,15 @@
 {
   "$schema": "node_modules/wrangler/config-schema.json",
-  "name": "webhook-rig",
+  "name": "chat-bot-test-ai-by-diego-ayme",
   "compatibility_date": "2026-11-03",
   "compatibility_flags": ["nodejs_als"],
   "observability": {
     "enabled": true
-  }
+  },
+  "kv_namespaces": [
+    {
+      "binding": "CALLBACKS",
+      "id": "f3935493d53440e2b766ad8760e838e5"
+    }
+  ]
 }

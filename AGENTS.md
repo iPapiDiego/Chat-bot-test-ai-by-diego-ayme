@@ -57,12 +57,12 @@ npm run deploy:dry  # build + empaquetado sin publicar
 npm run cf:dev      # build + wrangler dev (runtime real de Cloudflare)
 ```
 
-`wrangler.json` define `name`, `compatibility_date` y `compatibility_flags`. El build genera `dist/server/wrangler.json`; no lo edites a mano.
+`wrangler.json` define `name`, `compatibility_date`, `compatibility_flags` y el binding KV `CALLBACKS`. Wrangler aprovisiona el namespace al desplegar; si prefieres fijarlo, ejecuta `npx wrangler kv namespace create CALLBACKS` y añade el `id` al binding. El build genera `dist/server/wrangler.json`; no lo edites a mano.
 
 ## Arquitectura
 
 - `src/pages/api/probe.ts` es el proxy SSR. Hace la llamada al webhook para evitar CORS y valida el destino contra SSRF (`validateTarget` en `src/lib/webhook.ts`). En `development` permite hosts privados; en producción los bloquea salvo `ALLOW_PRIVATE_TARGETS=true`.
-- `src/pages/api/callback/[executionId].ts` recibe la respuesta asíncrona del bot: `POST` valida `executionId` (UUID v4), exige `application/json`, limita el cuerpo a 256 KB y guarda el payload en un `Map` global con TTL de 10 min y tope de 500 entradas; `GET` lo devuelve. `parseJsonBody` reintenta escapando caracteres de control dentro de strings.
+- `src/pages/api/callback/[executionId].ts` recibe la respuesta asíncrona del bot: `POST` valida `executionId` (UUID v4), exige `application/json`, limita el cuerpo a 256 KB y persiste `{receivedAt, payload}` en el binding KV `CALLBACKS` vía `src/lib/callback-store.ts` (clave `callback:<id>`, `expirationTtl` de 10 min); `GET` lo devuelve. `parseJsonBody` reintenta escapando caracteres de control dentro de strings. El almacenamiento vive en KV, no en memoria del isolate: POST y GET pueden caer en isolates distintos. `src/env.d.ts` declara los tipos del binding (los tipos de runtime de `wrangler types` chocan con la lib DOM de Astro).
 - `src/lib/webhook.ts` construye payloads (`simple` / `openai`), extrae el texto de respuesta de múltiples formatos y contiene el guard de hosts privados.
 - `src/lib/config.ts` maneja el estado del rig y su persistencia en `localStorage`.
 - `src/lib/security.ts` define el guard de túnel: `isTunnelRequest` detecta peticiones que no llegan por loopback y `isAllowedTunnelRequest` solo deja pasar `POST` a `/api/callback/<id>`.
